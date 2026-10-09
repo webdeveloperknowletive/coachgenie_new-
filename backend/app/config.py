@@ -16,6 +16,7 @@ class Settings(BaseSettings):
         "https://app.thecoachgenie.in,"
         "https://coachgenie-backend-51uq.onrender.com,"
         "https://coachgenie-copilotai.onrender.com,"
+        "https://admin.thecoachgenie.in,"
     )
 
     # origins_list (first definition removed) — the canonical one is below at the class level.
