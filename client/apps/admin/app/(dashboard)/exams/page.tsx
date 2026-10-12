@@ -68,6 +68,17 @@ export default function ExamsPage() {
   }, [exams]);
 
   async function handleCreate(data: ExamFormValues) {
+    const isDuplicate = exams.some(
+      (e) =>
+        e.name.trim().toLowerCase() === data.name.trim().toLowerCase() &&
+        e.batchId === data.batchId &&
+        e.date === data.date
+    );
+    if (isDuplicate) {
+      toast.error("An examination with this name and date already exists for this batch.");
+      return;
+    }
+
     await new Promise((r) => setTimeout(r, 400));
     addExam(data);
     toast.success("New examination scheduled!");

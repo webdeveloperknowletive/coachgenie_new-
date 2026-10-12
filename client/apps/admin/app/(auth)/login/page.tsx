@@ -16,7 +16,7 @@ import { useAuthStore } from "@/lib/stores/auth.store";
 import { CoachGenieLogo } from "@/components/common/CoachGenieLogo";
 
 const schema = z.object({
-  institute: z.string().min(1, "Institute code required"),
+  institute: z.string().optional(),
   email: z.string().email("Enter a valid email"),
   password: z.string().min(1, "Password required"),
 });
@@ -45,12 +45,16 @@ export default function LoginPage() {
         "http://localhost:8000/api/v1"
         }/auth/login`;
 
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (data.institute && data.institute.trim()) {
+        headers["X-Tenant-Subdomain"] = data.institute.trim();
+      }
+
       const backendRes = await fetch(loginUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Tenant-Subdomain": data.institute,
-        },
+        headers,
         body: JSON.stringify({
           email: data.email,
           password: data.password,
@@ -138,14 +142,17 @@ export default function LoginPage() {
         className="space-y-4"
       >
         <div className="space-y-1.5">
-          <label className="text-sm font-medium">
-            Institute Code
-          </label>
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium">
+              Institute Code
+            </label>
+            <span className="text-[11px] text-muted-foreground">Optional for Super Admin</span>
+          </div>
 
           <input
             {...register("institute")}
             type="text"
-            placeholder="visionacademy"
+            placeholder="demo (or leave blank for Super Admin)"
             autoComplete="off"
             className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
           />

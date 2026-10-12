@@ -2,7 +2,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, or_
 from app.models.user import User, RefreshToken
 from app.utils.security import (
     hash_password, verify_password,
@@ -17,14 +17,20 @@ logger = logging.getLogger("coaching_erp")
 
 async def register_user(db: AsyncSession, tenant_id: str, data: dict) -> User:
     email_clean = (data["email"] or "").strip().lower()
+    phone_clean = (data.get("phone") or "").strip() if data.get("phone") else None
     t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
+
+    dup_conds = [func.lower(User.email) == email_clean]
+    if phone_clean:
+        dup_conds.append(User.phone == phone_clean)
+
     result = await db.execute(
         select(User).where(
-            and_(User.tenant_id == t_uuid, func.lower(User.email) == email_clean)
+            and_(User.tenant_id == t_uuid, or_(*dup_conds))
         )
     )
     if result.scalar_one_or_none():
-        raise ConflictError("Email already registered.")
+        raise ConflictError("A user with this email or phone number is already registered.")
 
     user = User(
         tenant_id=t_uuid,
@@ -32,7 +38,7 @@ async def register_user(db: AsyncSession, tenant_id: str, data: dict) -> User:
         password_hash=hash_password(data["password"]),
         first_name=data["first_name"].strip(),
         last_name=(data.get("last_name") or "").strip(),
-        phone=(data.get("phone") or "").strip() if data.get("phone") else None,
+        phone=phone_clean,
         role="student",
     )
     db.add(user)
@@ -45,14 +51,27 @@ async def register_staff_user(
 ) -> User:
     """Create a staff user (counselor/tutor/admin) — owner-only action."""
     email_clean = (data["email"] or "").strip().lower()
+    phone_clean = (data.get("phone") or "").strip() if data.get("phone") else None
     t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
+    
+    # Server-side subscription quota verification
+    from app.models.tenant import Tenant
+    from app.services.entitlement import check_quota
+    tenant_obj = await db.get(Tenant, t_uuid)
+    if tenant_obj:
+        await check_quota(db, tenant_obj, "staff", increment=1)
+
+    dup_conds = [func.lower(User.email) == email_clean]
+    if phone_clean:
+        dup_conds.append(User.phone == phone_clean)
+
     result = await db.execute(
         select(User).where(
-            and_(User.tenant_id == t_uuid, func.lower(User.email) == email_clean)
+            and_(User.tenant_id == t_uuid, or_(*dup_conds))
         )
     )
     if result.scalar_one_or_none():
-        raise ConflictError("Email already registered.")
+        raise ConflictError("A user with this email or phone number is already registered.")
 
     staff = User(
         tenant_id=t_uuid,
@@ -60,7 +79,7 @@ async def register_staff_user(
         password_hash=hash_password(data["password"]),
         first_name=data["first_name"].strip(),
         last_name=(data.get("last_name") or "").strip(),
-        phone=(data.get("phone") or "").strip() if data.get("phone") else None,
+        phone=phone_clean,
         role=role,
     )
     db.add(staff)
@@ -91,6 +110,51 @@ async def login_user(db: AsyncSession, tenant_id: str, email: str, password: str
         "tenantId": str(user.tenant_id),
         "tenant_id": str(user.tenant_id),
         "role": user.role,
+        "email": user.email,
+    }
+    access_token = create_access_token(payload)
+    raw_refresh, hashed_refresh = create_refresh_token()
+
+    token = RefreshToken(
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        token_hash=hashed_refresh,
+        expires_at=refresh_token_expiry(),
+    )
+    db.add(token)
+    user.last_login_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    return {
+        "access_token": access_token,
+        "refresh_token": raw_refresh,
+        "user": user,
+    }
+
+
+async def login_platform_super_admin(db: AsyncSession, email: str, password: str) -> dict:
+    """Platform-level authentication for Super Admin users without requiring an institute subdomain."""
+    email_clean = (email or "").strip().lower()
+    result = await db.execute(
+        select(User).where(
+            and_(func.lower(User.email) == email_clean, User.role == "super_admin")
+        )
+    )
+    user = result.scalar_one_or_none()
+    password_ok = verify_password(password, user.password_hash) if user else False
+
+    if not user or not user.is_active or not password_ok:
+        # Check if the user belongs to a tenant instead
+        user_check = (await db.execute(select(User).where(func.lower(User.email) == email_clean))).scalar_one_or_none()
+        if user_check:
+            raise UnauthorizedError("Institute code is required to sign in to your institute account.")
+        raise UnauthorizedError("Invalid email or password.")
+
+    payload = {
+        "sub": str(user.id),
+        "tenantId": str(user.tenant_id),
+        "tenant_id": str(user.tenant_id),
+        "role": "super_admin",
         "email": user.email,
     }
     access_token = create_access_token(payload)

@@ -106,6 +106,15 @@ export function ConvertLeadModal({ lead, onClose, onSuccess }: ConvertLeadModalP
   }
 
   async function handleConfirmConversion() {
+    if (numTotalFee < 0 || numAmountPaid < 0) {
+      toast.error("Fee amounts cannot be negative");
+      return;
+    }
+    if (numAmountPaid > numTotalFee) {
+      toast.error("Amount paid cannot exceed total fee");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       let admStatus: "PENDING_DOCS" | "FEE_PENDING" | "CONFIRMED" = "PENDING_DOCS";

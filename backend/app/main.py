@@ -16,7 +16,8 @@ from app.routers import (
     auth, tenants, leads, students, admissions,
     batches, attendance, exams, fees, notifications, ai,
     parents, tutors, admins, growth_cards, auth_extended,
-    dashboard, syllabus, inbox_notification,
+    dashboard, syllabus, inbox_notification, roles, audit,
+    platform, automation,
 )
 from app.routers.ai_reports import router as ai_reports_router
 
@@ -98,6 +99,7 @@ Welcome to the official API documentation for **CoachGenie Phase 1**.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins_list,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
@@ -183,7 +185,21 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health():
+    """Fast liveness probe."""
     return {"status": "ok", "app": settings.APP_NAME}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Deep readiness probe verifying database connectivity safely without exposing internals."""
+    from sqlalchemy import text
+    from app.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+        return {"status": "ready"}
+    except Exception:
+        return JSONResponse(status_code=503, content={"status": "unready"})
 
 
 PREFIX = "/api/v1"
@@ -207,4 +223,8 @@ app.include_router(parents.router,            prefix=PREFIX)
 app.include_router(tutors.router,             prefix=PREFIX)
 app.include_router(admins.router,             prefix=PREFIX)
 app.include_router(inbox_notification.router, prefix=PREFIX)
-# FIX BUG-001: removed duplicate app.include_router(ai_reports_router) that was here
+app.include_router(roles.router,              prefix=PREFIX)
+app.include_router(audit.router,              prefix=PREFIX)
+app.include_router(platform.router,           prefix=PREFIX)
+app.include_router(automation.router,         prefix=PREFIX)
+app.include_router(automation.push_router,    prefix=PREFIX)

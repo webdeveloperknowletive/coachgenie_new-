@@ -54,7 +54,7 @@ export function LeadTable({ leads, onView, onDelete }: LeadTableProps) {
       ),
       cell: ({ row }) => (
         <div>
-          <p className="font-medium text-sm">{row.original.name}</p>
+          <p className="font-medium text-sm">{t(row.original.name)}</p>
           <p className="text-xs text-muted-foreground">{row.original.email || "—"}</p>
         </div>
       ),
@@ -102,7 +102,7 @@ export function LeadTable({ leads, onView, onDelete }: LeadTableProps) {
         const name = row.original.batchName;
         return name ? (
           <span className="text-xs bg-primary/10 text-primary rounded-full px-2.5 py-0.5 font-medium">
-            {name}
+            {t(name)}
           </span>
         ) : (
           <span className="text-xs text-muted-foreground">—</span>
@@ -115,7 +115,7 @@ export function LeadTable({ leads, onView, onDelete }: LeadTableProps) {
       accessorKey: "subject",
       header: () => <span>{t("Course")}</span>,
       cell: ({ getValue }) => (
-        <span className="text-sm">{getValue<string>() || "—"}</span>
+        <span className="text-sm">{t(getValue<string>() || "—")}</span>
       ),
     },
 

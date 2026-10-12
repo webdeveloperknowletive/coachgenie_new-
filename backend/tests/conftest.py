@@ -158,6 +158,16 @@ async def counselor_user(db_session, tenant) -> User:
     return await _make_user(db_session, tenant, "counselor")
 
 
+@pytest_asyncio.fixture
+async def student_user(db_session, tenant) -> User:
+    return await _make_user(db_session, tenant, "student")
+
+
+@pytest_asyncio.fixture
+async def tutor_user(db_session, tenant) -> User:
+    return await _make_user(db_session, tenant, "tutor")
+
+
 def make_access_token(user: User, tenant: Tenant) -> str:
     """
     Mirrors app.core.security.create_access_token's payload shape,
@@ -188,6 +198,24 @@ async def owner_headers(owner_user, tenant) -> dict:
 @pytest_asyncio.fixture
 async def counselor_headers(counselor_user, tenant) -> dict:
     token = make_access_token(counselor_user, tenant)
+    return {
+        "Authorization": f"Bearer {token}",
+        "X-Tenant-Subdomain": tenant.subdomain,
+    }
+
+
+@pytest_asyncio.fixture
+async def student_headers(student_user, tenant) -> dict:
+    token = make_access_token(student_user, tenant)
+    return {
+        "Authorization": f"Bearer {token}",
+        "X-Tenant-Subdomain": tenant.subdomain,
+    }
+
+
+@pytest_asyncio.fixture
+async def tutor_headers(tutor_user, tenant) -> dict:
+    token = make_access_token(tutor_user, tenant)
     return {
         "Authorization": f"Bearer {token}",
         "X-Tenant-Subdomain": tenant.subdomain,

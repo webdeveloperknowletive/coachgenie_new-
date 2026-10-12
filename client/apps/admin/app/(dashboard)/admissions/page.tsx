@@ -292,7 +292,7 @@ function AddAdmissionModal({ onClose, onSave, isSaving, batches }: AddAdmissionM
             <Field label={`${t("Student Name")} *`}>
               <input
                 value={form.studentName}
-                onChange={(e) => setForm((f) => ({ ...f, studentName: e.target.value }))}
+                onChange={(e) => setForm((f) => ({ ...f, studentName: e.target.value.replace(/[^a-zA-Z\s.'-]/g, '') }))}
                 className={inputCls()}
                 placeholder={t("e.g. Arjun Verma")}
               />
@@ -350,12 +350,14 @@ function AddAdmissionModal({ onClose, onSave, isSaving, batches }: AddAdmissionM
           {/* Contact Information */}
           <SectionDivider label={t("Contact Information")} />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-            <Field label={t("Student Phone")}>
+            <Field label={t("Student Phone (10 Digits)")}>
               <input
+                maxLength={10}
+                inputMode="numeric"
                 value={form.phone}
-                onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value.replace(/\D/g, '').slice(0, 10) }))}
                 className={inputCls()}
-                placeholder="+91 98765 43210"
+                placeholder="9876543210"
               />
             </Field>
             <Field label={t("Student Email")}>
@@ -370,17 +372,19 @@ function AddAdmissionModal({ onClose, onSave, isSaving, batches }: AddAdmissionM
             <Field label={t("Parent / Guardian Name")}>
               <input
                 value={form.parentName}
-                onChange={(e) => setForm((f) => ({ ...f, parentName: e.target.value }))}
+                onChange={(e) => setForm((f) => ({ ...f, parentName: e.target.value.replace(/[^a-zA-Z\s.'-]/g, '') }))}
                 className={inputCls()}
                 placeholder={t("Parent / Guardian Name")}
               />
             </Field>
-            <Field label={t("Parent Contact Number")}>
+            <Field label={t("Parent Contact Number (10 Digits)")}>
               <input
+                maxLength={10}
+                inputMode="numeric"
                 value={form.parentPhone}
-                onChange={(e) => setForm((f) => ({ ...f, parentPhone: e.target.value }))}
+                onChange={(e) => setForm((f) => ({ ...f, parentPhone: e.target.value.replace(/\D/g, '').slice(0, 10) }))}
                 className={inputCls()}
-                placeholder="+91 98765 43210"
+                placeholder="9876543210"
               />
             </Field>
           </div>
@@ -573,6 +577,23 @@ export default function AdmissionsPage() {
   }, [storeAdmissions]);
 
   async function handleSave(data: AddFormState) {
+    if (!data.studentName.trim() || /\d/.test(data.studentName)) {
+      toast.error(t("Student name is required and cannot contain numbers"));
+      return;
+    }
+    if (data.parentName && /\d/.test(data.parentName)) {
+      toast.error(t("Parent name cannot contain numbers"));
+      return;
+    }
+    if (data.phone && data.phone.replace(/\D/g, '').length !== 10) {
+      toast.error(t("Student phone must be exactly 10 digits"));
+      return;
+    }
+    if (data.parentPhone && data.parentPhone.replace(/\D/g, '').length !== 10) {
+      toast.error(t("Parent phone must be exactly 10 digits"));
+      return;
+    }
+
     const foundBatch = batches.find((b) => b.name === data.batchName);
     const totalFee = parseFloat(data.totalFee) || 0;
     const amountPaid = parseFloat(data.amountPaid) || 0;
@@ -613,43 +634,25 @@ export default function AdmissionsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify(payload),
-      }).catch(() => null);
+      });
 
-      if (res && res.ok) {
-        const json = await res.json();
-        const created = json.data ?? json;
-        addAdmission(created);
-      } else {
-        // Fallback local creation
-        const newAdm: AdmissionWithPayment = {
-          id: `adm-${Date.now()}`,
-          studentName: data.studentName,
-          grade: data.grade,
-          boardName: data.boardName,
-          batchName: data.batchName,
-          subjects: data.subjects,
-          phone: data.phone,
-          email: data.email,
-          parentName: data.parentName,
-          parentPhone: data.parentPhone,
-          schoolName: data.schoolName,
-          status: admStatus,
-          feeAmount: totalFee,
-          feePaid: amountPaid,
-          createdAt: new Date().toISOString(),
-          documents: [
-            { name: "Aadhar Card", required: true, submitted: true },
-            { name: "Previous Marksheet", required: true, submitted: false },
-          ],
-        };
-        addAdmission(newAdm);
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        const errorMsg = Array.isArray(errJson?.detail)
+          ? errJson.detail.map((e: any) => e.msg?.replace(/^Value error,\s*/i, "") || e.message || JSON.stringify(e)).join(", ")
+          : (errJson?.detail ?? errJson?.message ?? "Failed to save admission");
+        toast.error(errorMsg);
+        return;
       }
 
+      const json = await res.json();
+      const created = json.data ?? json;
+      addAdmission(created);
+
       toast.success(t("Admission application saved successfully!"));
       setShowForm(false);
-    } catch {
-      toast.success(t("Admission application saved successfully!"));
-      setShowForm(false);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save admission");
     } finally {
       setSaving(false);
     }

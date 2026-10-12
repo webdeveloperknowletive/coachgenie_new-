@@ -21,7 +21,12 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not set")
 
-DATABASE_URL = DATABASE_URL.replace("+asyncpg", "").replace("%", "%%")
+DATABASE_URL = (
+    DATABASE_URL.replace("+asyncpg", "")
+    .replace("?ssl=require", "?sslmode=require")
+    .replace("&ssl=require", "&sslmode=require")
+    .replace("%", "%%")
+)
 config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 
@@ -43,16 +48,7 @@ def run_migrations_online() -> None:
         DATABASE_URL.replace("%%", "%"),
         poolclass=pool.NullPool,
     )
-    with connectable.connect() as connection:
-        try:
-            from sqlalchemy import text
-            res = connection.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).scalar()
-            if res in ("a1b2c3d4e5f6", "1631330d5b10"):
-                connection.execute(text("UPDATE alembic_version SET version_num = 'ffb6954a2ad5'"))
-                connection.commit()
-        except Exception:
-            pass
-
+    with connectable.begin() as connection:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

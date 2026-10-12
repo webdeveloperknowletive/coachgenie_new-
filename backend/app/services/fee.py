@@ -1,6 +1,7 @@
 import uuid
+from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func, case,update
+from sqlalchemy import select, and_, func, case, update
 from app.models.fee import FeeInvoice, FeePayment, FeeStructure
 from app.models.student import Student
 from app.utils.exceptions import BadRequestError, ConflictError, NotFoundError
@@ -189,6 +190,7 @@ async def get_all_invoices(db: AsyncSession, tenant_id: str) -> list:
         .options(
             selectinload(FeeInvoice.student).selectinload(Student.admission),
             selectinload(FeeInvoice.payments),
+            selectinload(FeeInvoice.installments),
         )
         .where(FeeInvoice.tenant_id == tenant_id)
         .order_by(FeeInvoice.created_at.desc())
@@ -197,7 +199,25 @@ async def get_all_invoices(db: AsyncSession, tenant_id: str) -> list:
 
 
 async def create_fee_structure(db: AsyncSession, tenant_id: str, data: dict) -> FeeStructure:
-    fs = FeeStructure(tenant_id=tenant_id, **data)
+    name = (data.get("name") or "").strip()
+    if name:
+        existing = await db.scalar(
+            select(FeeStructure.id).where(
+                and_(
+                    FeeStructure.tenant_id == tenant_id,
+                    func.lower(FeeStructure.name) == name.lower()
+                )
+            )
+        )
+        if existing:
+            raise ConflictError(f"A fee structure with the name '{name}' already exists in this institute.")
+
+    allowed = {"batch_id", "name", "total_amount", "installments", "description", "is_active"}
+    clean_data = {k: v for k, v in data.items() if k in allowed and v is not None}
+    if "installments" not in clean_data and "installments_count" in data:
+        clean_data["installments"] = data["installments_count"]
+
+    fs = FeeStructure(tenant_id=tenant_id, **clean_data)
     db.add(fs)
     await db.flush()
     return fs
@@ -210,6 +230,7 @@ async def get_student_invoices(db: AsyncSession, tenant_id: str, student_id: str
         .options(
             selectinload(FeeInvoice.student).selectinload(Student.admission),
             selectinload(FeeInvoice.payments),
+            selectinload(FeeInvoice.installments),
         )
         .where(
             and_(FeeInvoice.tenant_id == tenant_id, FeeInvoice.student_id == student_id)
@@ -224,6 +245,7 @@ async def get_invoice_by_id(db: AsyncSession, tenant_id: str, invoice_id: str) -
         .options(
             selectinload(FeeInvoice.student).selectinload(Student.admission),
             selectinload(FeeInvoice.payments),
+            selectinload(FeeInvoice.installments),
         )
         .where(
             and_(FeeInvoice.tenant_id == tenant_id, FeeInvoice.id == invoice_id)
@@ -244,16 +266,56 @@ async def create_invoice(db: AsyncSession, tenant_id: str, data: dict) -> FeeInv
     if existing.scalar_one_or_none():
         raise ConflictError("Invoice number already exists.")
 
+    student_id = data.get("student_id")
+    fee_structure_id = data.get("fee_structure_id")
+    due_date = data.get("due_date")
+    if student_id and fee_structure_id and due_date:
+        existing_dup = await db.scalar(
+            select(FeeInvoice.id).where(
+                and_(
+                    FeeInvoice.tenant_id == tenant_id,
+                    FeeInvoice.student_id == student_id,
+                    FeeInvoice.fee_structure_id == fee_structure_id,
+                    FeeInvoice.due_date == due_date,
+                )
+            )
+        )
+        if existing_dup:
+            raise ConflictError("An invoice for this student, fee structure, and due date already exists.")
+
+    from app.services.financial_engine import (
+        to_decimal,
+        calculate_installment_schedule,
+        create_invoice_installments,
+    )
+
+    amount_due = float(to_decimal(data.get("amount_due", 0)))
+    discount = float(to_decimal(data.get("discount", 0)))
+    data["amount_due"] = amount_due
+    data["discount"] = discount
+
     invoice = FeeInvoice(tenant_id=tenant_id, **data)
     db.add(invoice)
     await db.flush()
+
+    # Generate default/custom installments for this invoice
+    installments_count = int(data.get("installments_count", 1))
+    schedule = calculate_installment_schedule(
+        total_amount=amount_due,
+        installments_count=installments_count,
+        start_date=date.fromisoformat(str(due_date)) if isinstance(due_date, str) else due_date,
+    )
+    await create_invoice_installments(db, tenant_id, invoice, schedule)
+
     return invoice
 
 
 async def record_payment(db: AsyncSession, tenant_id: str, invoice_id: str,
                          received_by: str, data: dict) -> FeePayment:
-    pay_amount = float(data.get("amount", 0))
-    if pay_amount <= 0:
+    from app.services.financial_engine import to_decimal, sync_payment_to_installments
+
+    pay_amount = to_decimal(data.get("amount", 0))
+    if pay_amount <= Decimal("0.00"):
         raise BadRequestError("Payment amount must be greater than 0.")
 
     result = await db.execute(
@@ -267,8 +329,10 @@ async def record_payment(db: AsyncSession, tenant_id: str, invoice_id: str,
     if invoice.status == "paid":
         raise BadRequestError("Invoice is already fully paid.")
 
-    outstanding = float(invoice.amount_due) - float(invoice.amount_paid)
-    if pay_amount > outstanding + 0.001:
+    due_dec = to_decimal(invoice.amount_due)
+    paid_dec = to_decimal(invoice.amount_paid)
+    outstanding = due_dec - paid_dec
+    if pay_amount > outstanding:
         raise BadRequestError(
             f"Payment amount (₹{pay_amount:,.2f}) exceeds outstanding balance (₹{outstanding:,.2f})."
         )
@@ -285,6 +349,7 @@ async def record_payment(db: AsyncSession, tenant_id: str, invoice_id: str,
             pass
 
     payment_data = {k: v for k, v in data.items() if k != "received_by"}
+    payment_data["amount"] = float(pay_amount)
 
     t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, str) else tenant_id
     inv_uuid = uuid.UUID(str(invoice_id)) if isinstance(invoice_id, str) else invoice_id
@@ -300,9 +365,12 @@ async def record_payment(db: AsyncSession, tenant_id: str, invoice_id: str,
     )
     db.add(payment)
 
-    new_paid = float(invoice.amount_paid) + pay_amount
-    invoice.amount_paid = new_paid
-    invoice.status = "paid" if new_paid >= float(invoice.amount_due) else "partial"
+    new_paid_dec = paid_dec + pay_amount
+    invoice.amount_paid = float(new_paid_dec)
+    invoice.status = "paid" if new_paid_dec >= due_dec else "partial"
+
+    # Sync payment to relational installments
+    await sync_payment_to_installments(db, invoice, pay_amount)
 
     # Synchronize student.admission fee_paid and payment_installment_schedule
     if invoice.student_id:
@@ -315,36 +383,75 @@ async def record_payment(db: AsyncSession, tenant_id: str, invoice_id: str,
             student = st_res.scalar_one_or_none()
             if student and getattr(student, "admission", None):
                 adm = student.admission
-                adm.fee_paid = new_paid
-                if getattr(adm, "payment_installment_schedule", None):
-                    import json
-                    sched_raw = adm.payment_installment_schedule
-                    sched = json.loads(sched_raw) if isinstance(sched_raw, str) else sched_raw
-                    slots = sched.get("installmentSchedule") or []
-                    
-                    # Check sum of slots vs amount_due to determine initial payment
-                    slots_sum = sum(float(s.get("amount", 0)) for s in slots)
-                    total_due_val = float(invoice.amount_due)
-                    init_paid = max(0.0, total_due_val - slots_sum) if slots_sum > 0 and slots_sum < total_due_val else 0.0
-
-                    rem_pool = max(0.0, new_paid - init_paid)
-                    for slot in slots:
-                        amt = float(slot.get("amount", 0))
-                        if rem_pool >= amt and amt > 0:
-                            slot["paid"] = True
-                            rem_pool -= amt
-                        else:
-                            slot["paid"] = False
-                    
-                    sched["amountPaid"] = new_paid
-                    sched["remaining"] = max(0.0, total_due_val - new_paid)
-                    sched["paymentStatus"] = "FULL" if new_paid >= total_due_val else "PARTIAL"
-                    adm.payment_installment_schedule = json.dumps(sched)
+                adm.fee_paid = float(new_paid_dec)
         except Exception:
             pass
 
     await db.commit()
     return payment
+
+
+async def get_payment_receipt(db: AsyncSession, tenant_id: str | uuid.UUID, payment_id: str | uuid.UUID) -> dict:
+    from app.services.financial_engine import to_decimal
+    from app.models.tenant import Tenant
+
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
+    p_uuid = uuid.UUID(str(payment_id)) if isinstance(payment_id, (str, uuid.UUID)) else payment_id
+
+    stmt = (
+        select(FeePayment)
+        .options(
+            selectinload(FeePayment.invoice).selectinload(FeeInvoice.student),
+        )
+        .where(and_(FeePayment.id == p_uuid, FeePayment.tenant_id == t_uuid))
+    )
+    result = await db.execute(stmt)
+    payment = result.scalar_one_or_none()
+    if not payment:
+        raise NotFoundError("Payment record")
+
+    invoice = payment.invoice
+    student = invoice.student if invoice else None
+    tenant = await db.get(Tenant, t_uuid)
+
+    tenant_name = tenant.name if tenant else "Institute"
+    tenant_subdomain = tenant.subdomain if tenant else ""
+    tenant_settings = getattr(tenant, "settings", {}) or {}
+    branding = tenant_settings.get("branding", {})
+
+    st_name = f"{student.first_name} {student.last_name}".strip() if (student and student.first_name) else "Student"
+    enr_no = student.enrollment_no if student else ""
+    grade = student.current_class if student else ""
+
+    due_dec = to_decimal(invoice.amount_due) if invoice else Decimal("0.00")
+    paid_dec = to_decimal(invoice.amount_paid) if invoice else Decimal("0.00")
+    bal_dec = max(Decimal("0.00"), due_dec - paid_dec)
+
+    sub_code = (tenant_subdomain[:4] if tenant_subdomain else "INST").upper()
+    return {
+        "receipt_no": f"REC-{sub_code}-{str(payment.id)[:8].upper()}",
+        "payment_id": payment.id,
+        "invoice_id": payment.invoice_id,
+        "invoice_no": invoice.invoice_no if invoice else "",
+        "student_id": payment.student_id,
+        "student_name": st_name,
+        "enrollment_no": enr_no,
+        "grade": grade,
+        "amount_paid": float(payment.amount),
+        "payment_mode": (payment.payment_mode or "cash").upper(),
+        "transaction_ref": payment.transaction_ref,
+        "paid_at": payment.paid_at or payment.created_at,
+        "notes": payment.notes,
+        "total_amount_due": float(due_dec),
+        "total_amount_paid": float(paid_dec),
+        "balance_remaining": float(bal_dec),
+        "institute_name": branding.get("institute_name") or tenant_name,
+        "institute_subdomain": tenant_subdomain,
+        "institute_phone": branding.get("phone") or getattr(tenant, "contact_phone", None),
+        "institute_email": branding.get("email") or getattr(tenant, "contact_email", None),
+        "institute_address": branding.get("address"),
+        "gstin": branding.get("gstin"),
+    }
 
 
 async def get_payments(db: AsyncSession, tenant_id: str, invoice_id: str) -> list:
@@ -473,4 +580,78 @@ async def get_revenue_summary(db: AsyncSession, tenant_id: str) -> dict:
         "total_invoices":    int(row.total_invoices),
         "overdue_count":     int(row.overdue_count),
         "pending_count":     int(row.pending_count),
+    }
+
+
+async def get_payment_receipt(db: AsyncSession, tenant_id: str, payment_id: str) -> dict:
+    import uuid
+    from datetime import datetime, date
+    from app.models.tenant import Tenant
+    from app.models.student import Student
+    from app.utils.exceptions import NotFoundError
+
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
+    p_uuid = uuid.UUID(str(payment_id)) if isinstance(payment_id, (str, uuid.UUID)) else payment_id
+
+    payment = await db.scalar(
+        select(FeePayment).where(
+            and_(FeePayment.id == p_uuid, FeePayment.tenant_id == str(t_uuid))
+        )
+    )
+    if not payment:
+        raise NotFoundError("Payment")
+
+    invoice = await db.scalar(
+        select(FeeInvoice).where(
+            and_(FeeInvoice.id == payment.invoice_id, FeeInvoice.tenant_id == str(t_uuid))
+        )
+    )
+    if not invoice:
+        raise NotFoundError("Invoice")
+
+    st_id = payment.student_id if payment.student_id else invoice.student_id
+    student = await db.get(Student, st_id)
+    if not student:
+        raise NotFoundError("Student")
+
+    tenant = await db.get(Tenant, t_uuid)
+    branding = (tenant.settings or {}).get("branding", {}) if tenant else {}
+
+    tot_due = float(invoice.amount_due or 0.0)
+    tot_paid = float(invoice.amount_paid or 0.0)
+    balance = max(0.0, tot_due - tot_paid)
+
+    paid_at_val = payment.paid_at
+    if paid_at_val is None:
+        paid_at_dt = datetime.now()
+    elif isinstance(paid_at_val, datetime):
+        paid_at_dt = paid_at_val
+    elif isinstance(paid_at_val, date):
+        paid_at_dt = datetime.combine(paid_at_val, datetime.min.time())
+    else:
+        paid_at_dt = datetime.now()
+
+    return {
+        "receipt_no": f"REC-{payment.transaction_ref or payment.id.hex[:8].upper()}",
+        "payment_id": payment.id,
+        "invoice_id": invoice.id,
+        "invoice_no": invoice.invoice_no,
+        "student_id": student.id,
+        "student_name": f"{student.first_name} {student.last_name or ''}".strip(),
+        "enrollment_no": student.enrollment_no,
+        "grade": student.current_class,
+        "amount_paid": float(payment.amount),
+        "payment_mode": payment.payment_mode,
+        "transaction_ref": payment.transaction_ref,
+        "paid_at": paid_at_dt,
+        "notes": payment.notes,
+        "total_amount_due": tot_due,
+        "total_amount_paid": tot_paid,
+        "balance_remaining": balance,
+        "institute_name": branding.get("institute_name") or (tenant.name if tenant else "Coaching Institute"),
+        "institute_subdomain": tenant.subdomain if tenant else "app",
+        "institute_phone": branding.get("phone"),
+        "institute_email": branding.get("email"),
+        "institute_address": branding.get("address"),
+        "gstin": branding.get("gstin"),
     }

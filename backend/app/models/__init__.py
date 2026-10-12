@@ -1,5 +1,7 @@
 from app.models.tenant import Tenant
 from app.models.user import User, RefreshToken
+from app.models.role import CustomRole
+from app.models.audit import AuditLog
 from app.models.lead import Lead, LeadActivity
 from app.models.admission import Admission
 from app.models.student import Student
@@ -12,21 +14,14 @@ from app.models.growth_card import GrowthCard
 from app.models.notification import NotificationTemplate, NotificationLog
 from app.models.ai import AISession, AIMessage, DashboardSnapshot
 from app.models.otp import OTPCode
-
 from app.models.inbox_notification import InboxNotification
-
-from app.models.batch import Batch, BatchStudent, Class, Subject       # noqa: F401
- 
-# 2. Lead (depends on Tenant, User, Batch)
-from app.models.lead import Lead, LeadActivity                         # noqa: F401
- 
-# 3. Student (depends on Tenant, User, Batch via BatchStudent)
-from app.models.student import Student                                 # noqa: F401
- 
+from app.models.automation import AutomationRule, AutomationEvent, AutomationExecution, WebPushSubscription
 
 __all__ = [
     "Tenant",
     "User", "RefreshToken",
+    "CustomRole",
+    "AuditLog",
     "Lead", "LeadActivity",
     "Admission",
     "Student",
@@ -34,9 +29,11 @@ __all__ = [
     "AttendanceSession", "AttendanceRecord",
     "Exam", "ExamResult",
     "FeeStructure", "FeeInvoice", "FeePayment",
-    "SyllabusTopic", "SyllabusProgress",
+    "SyllabusItem", "SyllabusProgress",
     "GrowthCard",
     "NotificationTemplate", "NotificationLog",
     "AISession", "AIMessage", "DashboardSnapshot",
     "OTPCode",
+    "InboxNotification",
+    "AutomationRule", "AutomationEvent", "AutomationExecution", "WebPushSubscription",
 ]

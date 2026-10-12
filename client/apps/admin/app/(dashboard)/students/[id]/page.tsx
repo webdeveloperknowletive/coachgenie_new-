@@ -52,7 +52,7 @@ export default function StudentProfilePage({ params }: { params: Promise<{ id: s
 
   const [student, setStudent] = useState<any>(storeStudent ?? null);
   const [batches, setBatches] = useState<any[]>([]);
-  const [fees, setFees] = useState({ total: 50000, paid: 50000, due: 0 });
+  const [fees, setFees] = useState({ total: 0, paid: 0, due: 0 });
   const [loading, setLoading] = useState(!student);
   const [showEnroll, setShowEnroll] = useState(false);
 
@@ -76,10 +76,10 @@ export default function StudentProfilePage({ params }: { params: Promise<{ id: s
               parentName: raw.parent_name ?? "",
               parentPhone: raw.parent_phone ?? "",
               grade: raw.current_class ?? "10th",
-              subjects: raw.subjects ?? ["Mathematics", "Physics"],
+              subjects: raw.subjects ?? [],
               status: raw.is_active === false ? "INACTIVE" : "ACTIVE",
-              address: raw.address ?? "Campus Hostels, Pune",
-              dob: raw.date_of_birth ?? "2009-05-15",
+              address: raw.address ?? "",
+              dob: raw.date_of_birth ?? "",
             });
           }
         }

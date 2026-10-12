@@ -1,5 +1,5 @@
+import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
-# from sqlalchemy import select, and_
 from sqlalchemy import select, func, and_
 from app.models.attendance import AttendanceSession, AttendanceRecord
 from app.utils.exceptions import ConflictError
@@ -118,7 +118,135 @@ async def take_attendance(db: AsyncSession, tenant_id: str, taken_by: str,
         )
         db.add(att)
 
+    await db.commit()
+    return session
+
+
+async def take_or_update_bulk_attendance(
+    db: AsyncSession,
+    tenant_id: str | uuid.UUID,
+    taken_by_user,
+    class_id: str | uuid.UUID,
+    session_date: date,
+    records: list,
+) -> AttendanceSession:
+    """
+    Rapid, authorization-hardened attendance entry.
+    Verifies:
+    1. Class belongs to tenant.
+    2. Tutor is assigned to class/batch (unless owner/admin).
+    3. Students are enrolled in class's batch.
+    4. Upserts session and records safely with audit logging.
+    """
+    from app.models.batch import Class, BatchStudent
+    from app.models.student import Student
+    from app.services.audit import log_audit_event
+    from app.utils.exceptions import NotFoundError, ForbiddenError, BadRequestError
+    import uuid
+
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
+    c_uuid = uuid.UUID(str(class_id)) if isinstance(class_id, (str, uuid.UUID)) else class_id
+    u_uuid = uuid.UUID(str(taken_by_user.id)) if hasattr(taken_by_user, "id") else uuid.UUID(str(taken_by_user))
+
+    # 1. Fetch Class
+    cls = await db.scalar(
+        select(Class).where(and_(Class.id == c_uuid, Class.tenant_id == t_uuid))
+    )
+    if not cls:
+        raise NotFoundError("Class")
+
+    # 2. Authorization check: Tutors can only take attendance for their own classes
+    role_key = (getattr(taken_by_user, "role", "") or "").lower()
+    if role_key == "tutor":
+        if cls.tutor_id and cls.tutor_id != u_uuid:
+            raise ForbiddenError("Tutors are only authorized to take attendance for their assigned classes.")
+
+    # 3. Verify student enrollment in batch
+    batch_students_res = await db.execute(
+        select(BatchStudent.student_id).where(BatchStudent.batch_id == cls.batch_id)
+    )
+    enrolled_student_ids = {str(sid) for sid in batch_students_res.scalars().all()}
+
+    # 4. Fetch or create AttendanceSession
+    existing_session = await db.scalar(
+        select(AttendanceSession).where(
+            and_(
+                AttendanceSession.tenant_id == t_uuid,
+                AttendanceSession.class_id == c_uuid,
+                AttendanceSession.session_date == session_date,
+            )
+        ).with_for_update()
+    )
+
+    is_update = bool(existing_session)
+    if existing_session:
+        session = existing_session
+        session.taken_by = u_uuid
+    else:
+        session = AttendanceSession(
+            id=uuid.uuid4(),
+            tenant_id=t_uuid,
+            class_id=c_uuid,
+            taken_by=u_uuid,
+            session_date=session_date,
+        )
+        db.add(session)
+        await db.flush()
+
+    # 5. Fetch existing records for session
+    existing_records_res = await db.execute(
+        select(AttendanceRecord).where(AttendanceRecord.session_id == session.id)
+    )
+    rec_by_student = {str(r.student_id): r for r in existing_records_res.scalars().all()}
+
+    seen_students = set()
+    for rec in records:
+        st_id_str = str(rec.get("student_id") or "").strip()
+        if not st_id_str or st_id_str in seen_students:
+            continue
+        seen_students.add(st_id_str)
+
+        # Enforce batch membership if batch has enrolled students
+        if enrolled_student_ids and st_id_str not in enrolled_student_ids:
+            raise BadRequestError(f"Student '{st_id_str}' is not enrolled in the batch for this class.")
+
+        st_uuid = uuid.UUID(st_id_str)
+        status_val = rec.get("status", "present")
+        remarks_val = rec.get("remarks")
+
+        if st_id_str in rec_by_student:
+            r_obj = rec_by_student[st_id_str]
+            r_obj.status = status_val
+            r_obj.remarks = remarks_val
+        else:
+            new_r = AttendanceRecord(
+                id=uuid.uuid4(),
+                tenant_id=t_uuid,
+                session_id=session.id,
+                student_id=st_uuid,
+                status=status_val,
+                remarks=remarks_val,
+            )
+            db.add(new_r)
+
     await db.flush()
+
+    # 6. Audit log
+    await log_audit_event(
+        db,
+        tenant_id=t_uuid,
+        actor_id=u_uuid,
+        action="ATTENDANCE_CORRECTED" if is_update else "ATTENDANCE_RECORDED",
+        entity_type="attendance_session",
+        entity_id=str(session.id),
+        metadata={
+            "class_id": str(c_uuid),
+            "session_date": str(session_date),
+            "records_count": len(seen_students),
+        },
+    )
+
+    await db.commit()
     return session
 
 

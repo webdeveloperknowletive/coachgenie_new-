@@ -3,8 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 const BACKEND = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 
-const ACCESS_TOKEN_MAX_AGE  = 60 * 15;
-const REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 7;
+const ACCESS_TOKEN_MAX_AGE  = 60 * 60 * 24;        // 24 hours
+const REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
 async function refreshBackendTokens(refreshToken: string) {
   try {
@@ -28,14 +28,19 @@ async function handler(
   let token = cookieStore.get("cg_access_token")?.value;
   const refreshToken = cookieStore.get("cg_refresh_token")?.value;
 
-  // Middleware already verified the JWT and injected this header
+  // Middleware already verified the JWT and injected headers
   const tenantId = request.headers.get("x-tenant-id");
-
-  if (!tenantId || tenantId === "undefined" || tenantId === "null") {
-    return NextResponse.json({ error: "Missing tenant context" }, { status: 401 });
-  }
+  const userRole = request.headers.get("x-user-role");
 
   const { path } = await params;
+  const isPlatformRoute = path.length > 0 && path[0] === "platform";
+
+  if (!tenantId || tenantId === "undefined" || tenantId === "null") {
+    if (userRole !== "super_admin" && !isPlatformRoute) {
+      return NextResponse.json({ error: "Missing tenant context" }, { status: 401 });
+    }
+  }
+
   const search = request.nextUrl.search;
   const url = `${BACKEND}/${path.join("/")}${search}`;
   const rawBody = !["GET", "DELETE", "HEAD"].includes(request.method)
@@ -62,8 +67,11 @@ async function handler(
   const headers: HeadersInit = {
     "Content-Type":  "application/json",
     "Authorization": `Bearer ${token}`,
-    "X-Tenant-Id":   tenantId,
   };
+
+  if (tenantId && tenantId !== "undefined" && tenantId !== "null") {
+    (headers as Record<string, string>)["X-Tenant-Id"] = tenantId;
+  }
 
   const init: RequestInit = { method: request.method, headers };
   if (rawBody !== undefined) {
@@ -87,8 +95,10 @@ async function handler(
       const retryHeaders: HeadersInit = {
         "Content-Type":  "application/json",
         "Authorization": `Bearer ${newTokens.access_token}`,
-        "X-Tenant-Id":   tenantId,
       };
+      if (tenantId && tenantId !== "undefined" && tenantId !== "null") {
+        (retryHeaders as Record<string, string>)["X-Tenant-Id"] = tenantId;
+      }
       const retryInit: RequestInit = { method: request.method, headers: retryHeaders };
       if (rawBody !== undefined) {
         retryInit.body = rawBody;

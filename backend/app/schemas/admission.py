@@ -1,7 +1,8 @@
 
 import json
+import re
 import uuid
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 from typing import Optional, List, Any
 
 
@@ -83,8 +84,32 @@ class AdmissionCreate(BaseModel):
 
     # Documents list from frontend
     documents: Optional[List[DocumentIn]] = []
+    custom_fields: Optional[dict] = Field(default_factory=dict)
 
     documents_verified: bool = False
+
+    @field_validator("student_name", "parent_name")
+    @classmethod
+    def validate_name_no_digits(cls, v: Optional[str]) -> Optional[str]:
+        if v:
+            v_clean = v.strip()
+            if re.search(r"\d", v_clean):
+                raise ValueError("Name cannot contain numbers.")
+            return v_clean
+        return v
+
+    @field_validator("phone", "parent_phone", mode="before")
+    @classmethod
+    def validate_phone(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        v_clean = str(v).strip()
+        if not v_clean:
+            return None
+        digits = re.sub(r"\D", "", v_clean)
+        if len(digits) != 10:
+            raise ValueError("Phone number must be exactly 10 digits.")
+        return digits
 
     @model_validator(mode="after")
     def resolve_applied_course(self):
@@ -124,6 +149,7 @@ class AdmissionUpdate(BaseModel):
     parent_name:  Optional[str] = None
     parent_phone: Optional[str] = None
     school_name:  Optional[str] = None
+    custom_fields: Optional[dict] = None
 
 
     @model_validator(mode="after")
@@ -187,12 +213,12 @@ class AdmissionOut(BaseModel):
     board_name:     Optional[str]        = None   # ← ADD
     batch_name:     Optional[str]        = None   # ← ADD
     batch_id:       Optional[uuid.UUID]  = None
-    batch_id:       Optional[uuid.UUID] = None
     subjects:      Optional[List[str]]  = None
     fee_amount:    Optional[float]      = None
     fee_paid:      Optional[float]      = None
     documents:     List[DocumentOut]    = []
     payment:       Optional[PaymentOut] = None
+    custom_fields: Optional[dict]       = Field(default_factory=dict)
 
     created_at: Optional[Any] = None
        # ── NEW: contact fields ──

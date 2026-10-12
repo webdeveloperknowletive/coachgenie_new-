@@ -85,17 +85,32 @@ async def login(
     request: Request,
     body: LoginRequest,
     db: DB,
-    tenant=Depends(get_tenant),
 ):
-    # FIX BUG-013: removed print() that leaked tenant subdomain to stdout
-    logger.debug("Login attempt for tenant: %s", tenant.subdomain)
-
-    result = await auth_service.login_user(
-        db,
-        str(tenant.id),
-        body.email,
-        body.password,
+    raw_subdomain = (
+        request.headers.get("x-tenant-subdomain")
+        or request.headers.get("X-Tenant-Subdomain")
+        or request.headers.get("x-tenant-id")
+        or request.headers.get("X-Tenant-Id")
     )
+
+    if raw_subdomain and raw_subdomain.strip():
+        tenant = await get_tenant(request, db=db, x_tenant_subdomain=raw_subdomain)
+        logger.debug("Login attempt for tenant: %s", tenant.subdomain)
+        result = await auth_service.login_user(
+            db,
+            str(tenant.id),
+            body.email,
+            body.password,
+        )
+    else:
+        # Platform Super Admin login (no institute subdomain required)
+        logger.debug("Platform Super Admin login attempt for email: %s", body.email)
+        result = await auth_service.login_platform_super_admin(
+            db,
+            body.email,
+            body.password,
+        )
+
     return {
         "access_token": result["access_token"],
         "refresh_token": result["refresh_token"],

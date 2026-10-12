@@ -8,11 +8,11 @@ import type { Student } from "@/lib/types/academic";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 
 const schema = z.object({
-  name:        z.string().min(2, "Name must be at least 2 characters"),
+  name:        z.string().min(2, "Name must be at least 2 characters").regex(/^[a-zA-Z\s.'-]+$/, "Name cannot contain numbers"),
   email:       z.string().email("Invalid email address").optional().or(z.literal("")),
-  phone:       z.string().optional().or(z.literal("")),
-  parentName:  z.string().optional().or(z.literal("")),
-  parentPhone: z.string().optional().or(z.literal("")),
+  phone:       z.string().regex(/^\d{10}$/, "Phone must be exactly 10 digits").optional().or(z.literal("")),
+  parentName:  z.string().regex(/^[a-zA-Z\s.'-]+$/, "Parent name cannot contain numbers").optional().or(z.literal("")),
+  parentPhone: z.string().regex(/^\d{10}$/, "Parent phone must be exactly 10 digits").optional().or(z.literal("")),
   grade:       z.string().optional().or(z.literal("")),
   subjects:    z.string().optional().or(z.literal("")),
   address:     z.string().optional().or(z.literal("")),
@@ -100,7 +100,15 @@ export function StudentForm({ defaultValues, onSubmit, onCancel, submitLabel = "
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Field label={t("Student Name")} error={errors.name?.message}>
-          <input {...register("name")} placeholder="Aarav Sharma" className={inputCls} />
+          <input
+            {...register("name", {
+              onChange: (e) => {
+                e.target.value = e.target.value.replace(/[^a-zA-Z\s.'-]/g, "");
+              },
+            })}
+            placeholder="Aarav Sharma"
+            className={inputCls}
+          />
         </Field>
         <Field label={t("Date of Birth")} error={errors.dob?.message}>
           <input {...register("dob")} type="date" className={inputCls} />
@@ -108,14 +116,42 @@ export function StudentForm({ defaultValues, onSubmit, onCancel, submitLabel = "
         <Field label={t("Email")} error={errors.email?.message}>
           <input {...register("email")} type="email" placeholder="aarav@gmail.com" className={inputCls} />
         </Field>
-        <Field label={t("Phone")} error={errors.phone?.message}>
-          <input {...register("phone")} placeholder="9876543210" className={inputCls} />
+        <Field label={t("Phone (10 Digits)")} error={errors.phone?.message}>
+          <input
+            maxLength={10}
+            inputMode="numeric"
+            {...register("phone", {
+              onChange: (e) => {
+                e.target.value = e.target.value.replace(/\D/g, "").slice(0, 10);
+              },
+            })}
+            placeholder="9876543210"
+            className={inputCls}
+          />
         </Field>
         <Field label={t("Parent Name")} error={errors.parentName?.message}>
-          <input {...register("parentName")} placeholder="Suresh Sharma" className={inputCls} />
+          <input
+            {...register("parentName", {
+              onChange: (e) => {
+                e.target.value = e.target.value.replace(/[^a-zA-Z\s.'-]/g, "");
+              },
+            })}
+            placeholder="Suresh Sharma"
+            className={inputCls}
+          />
         </Field>
-        <Field label={t("Parent Phone")} error={errors.parentPhone?.message}>
-          <input {...register("parentPhone")} placeholder="9876543200" className={inputCls} />
+        <Field label={t("Parent Phone (10 Digits)")} error={errors.parentPhone?.message}>
+          <input
+            maxLength={10}
+            inputMode="numeric"
+            {...register("parentPhone", {
+              onChange: (e) => {
+                e.target.value = e.target.value.replace(/\D/g, "").slice(0, 10);
+              },
+            })}
+            placeholder="9876543200"
+            className={inputCls}
+          />
         </Field>
         <Field label={t("Grade")} error={errors.grade?.message}>
           <select {...register("grade")} className={inputCls}>

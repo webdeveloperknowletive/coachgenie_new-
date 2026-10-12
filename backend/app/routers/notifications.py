@@ -273,3 +273,67 @@ async def get_logs(
 ):
     logs = await notif_service.get_logs(db, str(tenant.id))
     return {"success": True, "data": [NotificationLogOut.model_validate(l) for l in logs]}
+
+
+@router.get("/inbox")
+async def get_inbox(
+    db: DB,
+    tenant=Depends(get_tenant),
+    current_user=Depends(require_roles("student", "parent", "tutor", "counselor", "owner", "admin")),
+):
+    """
+    Returns notifications addressed canonically to current_user.id.
+    """
+    from sqlalchemy import select, and_
+    from datetime import timezone
+    stmt = (
+        select(NotificationLog)
+        .where(
+            and_(
+                NotificationLog.tenant_id == tenant.id,
+                NotificationLog.recipient_id == str(current_user.id),
+            )
+        )
+        .order_by(NotificationLog.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    logs = list(result.scalars().all())
+    return {"success": True, "data": [NotificationLogOut.model_validate(l) for l in logs]}
+
+
+@router.patch("/inbox/{log_id}/read")
+async def mark_as_read(
+    log_id: str,
+    db: DB,
+    tenant=Depends(get_tenant),
+    current_user=Depends(require_roles("student", "parent", "tutor", "counselor", "owner", "admin")),
+):
+    """
+    Marks a notification as read, validating canonical ownership (recipient_id == current_user.id).
+    """
+    from sqlalchemy import select, and_
+    from datetime import datetime, timezone
+    import uuid
+
+    try:
+        log_uuid = uuid.UUID(str(log_id))
+    except Exception:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    stmt = (
+        select(NotificationLog)
+        .where(
+            and_(
+                NotificationLog.id == log_uuid,
+                NotificationLog.tenant_id == tenant.id,
+                NotificationLog.recipient_id == str(current_user.id),
+            )
+        )
+    )
+    log = (await db.execute(stmt)).scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    log.read_at = datetime.now(timezone.utc)
+    await db.flush()
+    return {"success": True, "data": NotificationLogOut.model_validate(log)}

@@ -80,11 +80,17 @@ class User(Base):
     avatar_url: Mapped[str] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    custom_role_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("custom_roles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     last_login_at = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     created_at = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     updated_at = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"), onupdate=text("NOW()"))
 
     tenant = relationship("Tenant", back_populates="users")
+    custom_role = relationship("CustomRole", back_populates="users", lazy="selectin")
     refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
     otp_verifications = relationship("OTPVerification", back_populates="user", cascade="all, delete-orphan")
 

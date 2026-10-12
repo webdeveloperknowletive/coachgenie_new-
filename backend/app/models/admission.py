@@ -98,6 +98,7 @@ class Admission(Base):
     # ── Documents stored as JSON array ────────────────────────────────────────
     # Shape: [{ name, required, submitted }, ...]
     documents: Mapped[list] = mapped_column(JSON, nullable=True, default=list)
+    custom_fields: Mapped[dict] = mapped_column(JSON, nullable=True, default=dict)
 
     # ── Relationships ──────────────────────────────────────────────────────────
     tenant = relationship("Tenant", back_populates="admissions")

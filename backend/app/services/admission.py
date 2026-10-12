@@ -10,6 +10,7 @@ from app.models.lead import Lead
 from app.utils.exceptions import NotFoundError
 from app.utils.pagination import paginate
 from app.models.fee import FeeInvoice, FeePayment
+from decimal import Decimal
 from datetime import date as date_type
 
 # ── Admission number generator ─────────────────────────────────────────────────
@@ -128,8 +129,47 @@ async def get_admission(
 async def create_admission(
     db: AsyncSession, tenant_id: str, data: dict
 ) -> Admission:
-    
-   
+    from app.utils.exceptions import ConflictError
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
+
+    lead_id_raw = data.get("lead_id")
+    if lead_id_raw:
+        try:
+            l_uuid = uuid.UUID(str(lead_id_raw))
+            existing_lead_adm = await db.scalar(
+                select(Admission.id).where(
+                    and_(
+                        Admission.tenant_id == t_uuid,
+                        Admission.lead_id == l_uuid,
+                    )
+                )
+            )
+            if existing_lead_adm:
+                raise ConflictError("An admission application already exists for this lead.")
+        except (ValueError, TypeError):
+            pass
+
+    phone = (data.get("phone") or "").strip()
+    email = (data.get("email") or "").strip().lower()
+
+    dup_conditions = []
+    if phone:
+        dup_conditions.append(Admission.phone == phone)
+    if email:
+        dup_conditions.append(func.lower(Admission.email) == email)
+
+    if dup_conditions:
+        existing_adm = await db.scalar(
+            select(Admission.id).where(
+                and_(
+                    Admission.tenant_id == t_uuid,
+                    or_(*dup_conditions)
+                )
+            )
+        )
+        if existing_adm:
+            raise ConflictError("An admission application with this email or phone number already exists in this institute.")
+
     admission_number = await next_admission_no(db, tenant_id)
 
     # Serialize payment object → JSON text for storage
@@ -143,14 +183,6 @@ async def create_admission(
             else payment_data.model_dump()
         )
 
-    # Parse batch_id UUID
-    # batch_id_raw = data.get("batch_id")
-    # batch_id_val = None
-    # if batch_id_raw:
-    #     try:
-    #         batch_id_val = uuid.UUID(str(batch_id_raw))
-    #     except Exception:
-    #         print("INVALID batch_id:", batch_id_raw)
     batch_id_raw = data.get("batch_id")
     batch_id_val = None
     if batch_id_raw:
@@ -184,6 +216,7 @@ async def create_admission(
         payment_installment_schedule = payment_json,
         documents = data.get("documents") or [],
         subjects  = [s for s in (data.get("subjects") or []) if s and s != "N/A"],
+        custom_fields = data.get("custom_fields") or {},
     )
     db.add(admission)
     await db.flush()
@@ -521,11 +554,19 @@ async def generate_student_from_admission(
     #    existed — it's keyed off the admission itself, so it still runs
     #    when fee_amount is set/updated AFTER the student was first created
     #    (e.g. admission confirmed later with fee details filled in). ──
-    raw_fee_amount = getattr(admission, "fee_amount", None)
-    fee_amount = float(raw_fee_amount) if raw_fee_amount is not None else 0.0
-    fee_paid   = float(getattr(admission, "fee_paid", 0) or 0.0)
+    # ── Invoice creation with exact Decimal installments ──
+    from app.services.financial_engine import (
+        to_decimal,
+        calculate_installment_schedule,
+        create_invoice_installments,
+        sync_payment_to_installments,
+    )
 
-    if fee_amount > 0:
+    raw_fee_amount = getattr(admission, "fee_amount", None)
+    fee_amount_dec = to_decimal(raw_fee_amount) if raw_fee_amount is not None else Decimal("0.00")
+    fee_paid_dec   = to_decimal(getattr(admission, "fee_paid", 0) or Decimal("0.00"))
+
+    if fee_amount_dec > Decimal("0.00"):
         existing_inv = await db.scalar(
             select(FeeInvoice).where(
                 and_(
@@ -535,28 +576,31 @@ async def generate_student_from_admission(
             )
         )
 
-        if fee_paid >= fee_amount:
+        if fee_paid_dec >= fee_amount_dec:
             inv_status = "paid"
-        elif fee_paid > 0:
+        elif fee_paid_dec > Decimal("0.00"):
             inv_status = "partial"
         else:
             inv_status = "pending"
 
-        # Parse due date from installment schedule
+        # Parse due date and installment count from schedule
         due_date = date_type.today()
+        inst_count = 1
         try:
             sched_raw = admission.payment_installment_schedule
             if sched_raw:
                 sched = json.loads(sched_raw) if isinstance(sched_raw, str) else sched_raw
                 slots = sched.get("installmentSchedule") or []
-                if slots and slots[0].get("dueDate"):
-                    due_date = date_type.fromisoformat(slots[0]["dueDate"])
+                if slots:
+                    inst_count = len(slots)
+                    if slots[0].get("dueDate"):
+                        due_date = date_type.fromisoformat(str(slots[0]["dueDate"]))
         except Exception:
             pass
 
         if existing_inv:
-            existing_inv.amount_due = fee_amount
-            existing_inv.amount_paid = fee_paid
+            existing_inv.amount_due = float(fee_amount_dec)
+            existing_inv.amount_paid = float(fee_paid_dec)
             existing_inv.status = inv_status
             existing_inv.due_date = due_date
             inv_obj = existing_inv
@@ -565,17 +609,27 @@ async def generate_student_from_admission(
                 tenant_id   = str(admission.tenant_id),
                 student_id  = student.id,
                 invoice_no  = f"INV-{admission.admission_number}",
-                amount_due  = fee_amount,
-                amount_paid = fee_paid,
-                discount    = 0,
+                amount_due  = float(fee_amount_dec),
+                amount_paid = float(fee_paid_dec),
+                discount    = 0.0,
                 due_date    = due_date,
                 status      = inv_status,
             )
             db.add(invoice)
             inv_obj = invoice
+            await db.flush()
+
+            # Create relational installments
+            schedule = calculate_installment_schedule(
+                total_amount=fee_amount_dec,
+                installments_count=inst_count,
+                start_date=due_date,
+            )
+            await create_invoice_installments(db, admission.tenant_id, inv_obj, schedule)
+
         await db.flush()
 
-        if fee_paid > 0:
+        if fee_paid_dec > Decimal("0.00"):
             existing_pay = await db.scalar(
                 select(FeePayment).where(
                     FeePayment.invoice_id == inv_obj.id,
@@ -598,7 +652,7 @@ async def generate_student_from_admission(
                     tenant_id=str(admission.tenant_id),
                     invoice_id=inv_obj.id,
                     student_id=student.id,
-                    amount=fee_paid,
+                    amount=float(fee_paid_dec),
                     payment_mode=pay_mode,
                     transaction_ref=f"REC-{inv_obj.invoice_no}",
                     paid_at=pay_date,
@@ -606,6 +660,9 @@ async def generate_student_from_admission(
                 )
                 db.add(pay)
                 await db.flush()
+
+                # Sync payment to relational installments
+                await sync_payment_to_installments(db, inv_obj, fee_paid_dec)
 
     return student
 
@@ -622,32 +679,43 @@ async def convert_lead(
 
     from sqlalchemy import and_
     from app.utils.exceptions import ConflictError
+    from app.models.tenant import Tenant
+    from app.services.entitlement import check_quota
+    from app.services.audit import log_audit_event
 
-    # 1. Fetch lead
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
+    l_uuid = uuid.UUID(str(lead_id)) if isinstance(lead_id, (str, uuid.UUID)) else lead_id
+
+    # 1. Fetch lead with row lock to serialize concurrent attempts
     lead_result = await db.execute(
         select(Lead).where(
-            and_(Lead.id == lead_id, Lead.tenant_id == tenant_id)
-        )
+            and_(Lead.id == l_uuid, Lead.tenant_id == t_uuid)
+        ).with_for_update()
     )
     lead = lead_result.scalar_one_or_none()
     if not lead:
         raise NotFoundError("Lead")
-    if lead.status == "converted":
+    if lead.status == "converted" or lead.status == "enrolled":
         raise ConflictError("Lead is already converted.")
 
-    # 2. Check no admission exists for this lead yet
+    # 2. Server-side quota check
+    tenant_obj = await db.get(Tenant, t_uuid)
+    if tenant_obj:
+        await check_quota(db, tenant_obj, "students", increment=1)
+
+    # 3. Check no admission exists for this lead yet
     existing_adm = await db.scalar(
         select(Admission).where(
             and_(
-                Admission.tenant_id == tenant_id,
-                Admission.lead_id   == lead_id,
+                Admission.tenant_id == t_uuid,
+                Admission.lead_id   == str(l_uuid),
             )
-        )
+        ).with_for_update()
     )
     if existing_adm:
         raise ConflictError("An admission already exists for this lead.")
 
-    # 3. Create admission from lead data
+    # 4. Create admission from lead data
     data = {
         "lead_id":       str(lead.id),
         "student_name":  lead.full_name,
@@ -660,14 +728,14 @@ async def convert_lead(
         "board_name":    lead.board_name,
         "applied_course": lead.interested_course or "N/A",
         "status":        "CONFIRMED",
-        "documents_verified": False,                  # ← was wrongly set to lead.documents
-        "documents":          lead.documents or [],   # ← documents in correct field
+        "documents_verified": False,
+        "documents":          lead.documents or [],
         "subjects":           lead.subjects or [],
         **(admission_data or {}),
     }
-    admission = await create_admission(db, tenant_id, data)
+    admission = await create_admission(db, str(t_uuid), data)
 
-    # 4. Auto-approve and generate student
+    # 5. Auto-approve and generate student
     admission.status      = "CONFIRMED"
     admission.approved_by = converted_by
     admission.approved_at = datetime.now()
@@ -675,9 +743,24 @@ async def convert_lead(
 
     student = await generate_student_from_admission(db, admission)
 
-    # 5. Mark lead as converted
+    # 6. Mark lead as converted
     lead.status       = "converted"
     lead.converted_at = datetime.now()
     await db.flush()
+
+    # 7. Write audit log in same active transaction
+    await log_audit_event(
+        db,
+        tenant_id=t_uuid,
+        actor_id=converted_by,
+        action="CONVERT_LEAD",
+        entity_type="lead",
+        entity_id=str(lead.id),
+        metadata={
+            "student_id": str(student.id),
+            "enrollment_no": student.enrollment_no,
+            "admission_id": str(admission.id),
+        },
+    )
 
     return admission, student

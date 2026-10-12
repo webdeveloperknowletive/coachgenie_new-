@@ -83,6 +83,7 @@ class BatchCreate(BaseModel):
     status: Optional[str] = "ACTIVE"
     schedule: Optional[List[ScheduleSlot]] = None
     subjects: Optional[List[str]] = []
+    custom_fields: Optional[dict] = Field(default_factory=dict)
 
     @field_validator("start_date", "end_date", mode="before")
     @classmethod
@@ -122,6 +123,7 @@ class BatchUpdate(BaseModel):
     end_date: Optional[date] = None
     schedule: Optional[List[ScheduleSlot]] = None
     subjects: Optional[List[str]] = None
+    custom_fields: Optional[dict] = None
 
     @field_validator("start_date", "end_date", mode="before")
     @classmethod
@@ -161,6 +163,7 @@ class BatchOut(BaseModel):
     student_ids: List[str] = []
     schedule: Optional[List[ScheduleSlot]] = None
     subjects: Optional[List[str]] = []
+    custom_fields: Optional[dict] = Field(default_factory=dict)
 
     class Config:
         from_attributes = True

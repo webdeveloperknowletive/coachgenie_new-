@@ -1,3 +1,4 @@
+import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func, or_
 from app.models.lead import Lead, LeadActivity
@@ -126,7 +127,32 @@ async def get_lead(db: AsyncSession, tenant_id: str, lead_id: str) -> Lead:
 
 
 async def create_lead(db: AsyncSession, tenant_id: str, data: dict) -> Lead:
-    lead = Lead(tenant_id=tenant_id, **data)
+    import uuid
+    from app.utils.exceptions import ConflictError
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
+
+    phone = (data.get("phone") or "").strip()
+    email = (data.get("email") or "").strip().lower()
+
+    dup_conditions = []
+    if phone:
+        dup_conditions.append(Lead.phone == phone)
+    if email:
+        dup_conditions.append(func.lower(Lead.email) == email)
+
+    if dup_conditions:
+        existing = await db.scalar(
+            select(Lead.id).where(
+                and_(
+                    Lead.tenant_id == t_uuid,
+                    or_(*dup_conditions)
+                )
+            )
+        )
+        if existing:
+            raise ConflictError("A lead with this phone number or email already exists in this institute.")
+
+    lead = Lead(tenant_id=t_uuid, **data)
     db.add(lead)
     await db.flush()
 
@@ -137,7 +163,33 @@ async def create_lead(db: AsyncSession, tenant_id: str, data: dict) -> Lead:
 
 
 async def update_lead(db: AsyncSession, tenant_id: str, lead_id: str, data: dict) -> Lead:
+    import uuid
+    from app.utils.exceptions import ConflictError
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
     lead = await get_lead(db, tenant_id, lead_id)
+
+    new_phone = (data.get("phone") or "").strip() if "phone" in data and data["phone"] is not None else None
+    new_email = (data.get("email") or "").strip().lower() if "email" in data and data["email"] is not None else None
+
+    dup_conditions = []
+    if new_phone and new_phone != lead.phone:
+        dup_conditions.append(Lead.phone == new_phone)
+    if new_email and new_email != (lead.email or "").lower():
+        dup_conditions.append(func.lower(Lead.email) == new_email)
+
+    if dup_conditions:
+        existing = await db.scalar(
+            select(Lead.id).where(
+                and_(
+                    Lead.tenant_id == t_uuid,
+                    Lead.id != lead.id,
+                    or_(*dup_conditions)
+                )
+            )
+        )
+        if existing:
+            raise ConflictError("Another lead with this phone number or email already exists in this institute.")
+
     for key, value in data.items():
         if value is not None:
             setattr(lead, key, value)
@@ -181,6 +233,88 @@ async def add_activity(db: AsyncSession, tenant_id: str, lead_id: str,
     db.add(activity)
     await db.flush()
     return activity
+
+
+DEFAULT_CRM_PIPELINE = {
+    "stages": [
+        {"id": "new", "label": "New Inquiry", "order": 1, "is_system": True},
+        {"id": "contacted", "label": "Contacted", "order": 2, "is_system": False},
+        {"id": "counselling", "label": "Counseling Session", "order": 3, "is_system": False},
+        {"id": "demo_scheduled", "label": "Demo Class Scheduled", "order": 4, "is_system": False},
+        {"id": "negotiation", "label": "Fee Negotiation", "order": 5, "is_system": False},
+        {"id": "converted", "label": "Converted / Enrolled", "order": 6, "is_system": True},
+        {"id": "lost", "label": "Lost / Dropped", "order": 7, "is_system": True},
+    ],
+    "required_documents": [
+        {"id": "photo", "name": "Student Passport Photo", "mandatory": True},
+        {"id": "aadhaar", "name": "Identity Proof (Aadhaar/ID)", "mandatory": False},
+        {"id": "marksheet", "name": "Previous Year Marksheet", "mandatory": False},
+    ],
+}
+
+
+async def get_crm_pipeline(db: AsyncSession, tenant_id: str | uuid.UUID) -> dict:
+    from app.models.tenant import Tenant
+    import uuid
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
+    tenant = await db.get(Tenant, t_uuid)
+    if not tenant:
+        raise NotFoundError("Tenant")
+    settings = tenant.settings or {}
+    return settings.get("crm_pipeline") or DEFAULT_CRM_PIPELINE
+
+
+async def update_crm_pipeline(
+    db: AsyncSession,
+    tenant_id: str | uuid.UUID,
+    pipeline_data: dict,
+    actor_id: str | uuid.UUID | None = None,
+    ip_address: str | None = None,
+) -> dict:
+    from app.models.tenant import Tenant
+    from app.services.audit import log_audit_event
+    from app.utils.exceptions import BadRequestError
+    import uuid
+
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
+    tenant = await db.get(Tenant, t_uuid)
+    if not tenant:
+        raise NotFoundError("Tenant")
+
+    current_pipeline = await get_crm_pipeline(db, t_uuid)
+    old_stage_ids = {s["id"] for s in current_pipeline.get("stages", [])}
+    new_stage_ids = {s["id"] for s in pipeline_data.get("stages", [])}
+
+    # Deletion guard: Check if removed stages are referenced by existing leads
+    removed_stage_ids = old_stage_ids - new_stage_ids
+    for removed_id in removed_stage_ids:
+        lead_count = await db.scalar(
+            select(func.count(Lead.id)).where(
+                and_(Lead.tenant_id == t_uuid, Lead.status == removed_id)
+            )
+        ) or 0
+        if lead_count > 0:
+            raise BadRequestError(
+                f"Cannot delete stage '{removed_id}' because {lead_count} lead(s) are currently assigned to it. Please reassign them first."
+            )
+
+    settings = dict(tenant.settings or {})
+    settings["crm_pipeline"] = pipeline_data
+    tenant.settings = settings
+    await db.flush()
+
+    await log_audit_event(
+        db,
+        tenant_id=t_uuid,
+        actor_id=actor_id,
+        action="UPDATE_CRM_PIPELINE",
+        entity_type="crm_pipeline",
+        entity_id=str(t_uuid),
+        ip_address=ip_address,
+        metadata={"stages_count": len(pipeline_data.get("stages", []))},
+    )
+
+    return settings["crm_pipeline"]
 
 
 async def get_activities(db: AsyncSession, tenant_id: str, lead_id: str) -> list:

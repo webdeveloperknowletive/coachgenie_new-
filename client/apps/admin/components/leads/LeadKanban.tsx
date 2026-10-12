@@ -33,7 +33,7 @@ function formatKanbanDate(dateStr: string, lang: string): string {
 function KanbanCard({
   lead, onClick, overlay = false,
 }: { lead: Lead; onClick: () => void; overlay?: boolean }) {
-  const { language } = useLanguage();
+  const { language, t } = useLanguage();
   const {
     attributes, listeners, setNodeRef,
     transform, transition, isDragging,
@@ -53,8 +53,8 @@ function KanbanCard({
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold truncate">{lead.name}</p>
-          <p className="text-xs text-muted-foreground truncate">{lead.grade} · {lead.subject}</p>
+          <p className="text-sm font-semibold truncate">{t(lead.name)}</p>
+          <p className="text-xs text-muted-foreground truncate">{lead.grade ? t(lead.grade) : ""} · {lead.subject ? t(lead.subject) : ""}</p>
         </div>
         <div
           {...attributes}

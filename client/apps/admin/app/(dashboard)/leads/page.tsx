@@ -185,44 +185,25 @@ export default function LeadsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify(payload),
-      }).catch(() => null);
+      });
 
-      if (res && res.ok) {
-        const json = await res.json();
-        const created = json.data ?? json;
-        addLead(mapLead(created));
-      } else {
-        // Fallback local creation
-        const newLead: Lead = {
-          id: `lead-${Date.now()}`,
-          name: data.name ?? "New Lead",
-          parentName: data.parentName ?? "",
-          email: data.email ?? "",
-          phone: data.phone ?? "",
-          grade: data.grade ?? "",
-          parentContactNumber: data.parentContactNumber ?? "",
-          schoolName: data.schoolName ?? "",
-          source: (data.source as any) ?? "OTHER",
-          stage: "NEW",
-          subject: data.subject ?? "",
-          notes: data.notes ?? "",
-          boardName: data.boardName ?? "",
-          batchId: data.batchId || "",
-          batchName: batches.find((b) => b.id === data.batchId)?.name || "",
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          activities: [],
-          tags: [],
-          assignedTo: "Staff Counselor",
-        };
-        addLead(newLead);
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        const errorMsg = Array.isArray(errJson?.detail)
+          ? errJson.detail.map((e: any) => e.msg?.replace(/^Value error,\s*/i, "") || e.message || JSON.stringify(e)).join(", ")
+          : (errJson?.detail ?? errJson?.message ?? "Failed to create lead");
+        toast.error(errorMsg);
+        return;
       }
+
+      const json = await res.json();
+      const created = json.data ?? json;
+      addLead(mapLead(created));
 
       toast.success("New lead created successfully!");
       setShowForm(false);
-    } catch {
-      toast.success("Lead created!");
-      setShowForm(false);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to create lead");
     }
   }
 

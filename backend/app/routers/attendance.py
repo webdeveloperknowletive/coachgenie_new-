@@ -44,6 +44,25 @@ async def take_attendance(
     )
     return {"success": True, "data": {"session_id": str(session.id)}}
 
+
+@router.post("/bulk", status_code=200)
+async def take_or_update_bulk(
+    body: TakeAttendanceRequest,
+    db: DB,
+    tenant=Depends(get_tenant),
+    current_user=Depends(require_roles("owner", "admin", "tutor")),
+):
+    records = [{"student_id": str(r.student_id), "status": r.status, "remarks": r.remarks} for r in body.records]
+    session = await att_service.take_or_update_bulk_attendance(
+        db,
+        str(tenant.id),
+        current_user,
+        str(body.class_id),
+        body.session_date,
+        records,
+    )
+    return {"success": True, "data": {"session_id": str(session.id), "session_date": str(session.session_date)}}
+
 @router.get("/class/{class_id}")
 async def list_sessions(
     class_id: str,
@@ -81,14 +100,8 @@ async def student_summary(
             raise HTTPException(status_code=403, detail="Access denied")
 
     elif current_user.role == "parent":
-        result = await db.execute(
-            select(Student).where(
-                and_(Student.tenant_id == tenant.id, Student.parent_email == current_user.email)
-            )
-        )
-        linked = result.scalar_one_or_none()
-        if not linked or str(linked.id) != student_id:
-            raise HTTPException(status_code=403, detail="Access denied")
+        from app.services.parent import verify_parent_child_access
+        await verify_parent_child_access(db, str(tenant.id), current_user, student_id)
 
     # Staff roles (owner, tutor, counselor) — unrestricted access, fall through.
 

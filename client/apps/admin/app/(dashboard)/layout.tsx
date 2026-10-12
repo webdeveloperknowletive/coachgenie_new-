@@ -10,21 +10,23 @@ import { AppShell } from "@/components/layout/AppShell";
 import { useAuthStore, type UserRole } from "@/lib/stores/auth.store";
 
 const MODULE_ROLES: Record<string, UserRole[]> = {
-  "/dashboard": ["owner", "counselor", "tutor"],
-  "/leads": ["owner", "counselor"],
-  "/admissions": ["owner", "counselor"],
-  "/students": ["owner", "counselor", "tutor"],
-  "/batches": ["owner", "counselor", "tutor"],
-  "/exams": ["owner", "tutor"],
-  "/sessions": ["owner", "tutor"],
-  "/attendance": ["owner", "tutor"],
+  "/dashboard": ["super_admin", "owner", "admin", "counselor", "tutor", "coach"],
+  "/platform": ["super_admin"],
+  "/automation": ["owner", "admin", "counselor"],
+  "/leads": ["owner", "admin", "counselor"],
+  "/admissions": ["owner", "admin", "counselor"],
+  "/students": ["owner", "admin", "counselor", "tutor", "coach"],
+  "/batches": ["owner", "admin", "counselor", "tutor", "coach"],
+  "/exams": ["owner", "admin", "tutor", "coach"],
+  "/sessions": ["owner", "admin", "tutor", "coach"],
+  "/attendance": ["owner", "admin", "tutor", "coach"],
   "/billing": ["owner"],
-  "/settings": ["owner"],
-  "/fees": ["owner", "counselor"],
-  "/growth-cards": ["owner", "counselor", "tutor"],
-  "/notifications": ["owner", "counselor", "tutor"],
-  "/ai": ["owner", "counselor", "tutor"],
-  "/docs": ["owner", "counselor", "tutor"],
+  "/settings": ["owner", "admin"],
+  "/fees": ["owner", "admin", "counselor"],
+  "/growth-cards": ["owner", "admin", "counselor", "tutor", "coach"],
+  "/notifications": ["owner", "admin", "counselor", "tutor", "coach"],
+  "/ai": ["super_admin", "owner", "admin", "counselor", "tutor", "coach"],
+  "/docs": ["super_admin", "owner", "admin", "counselor", "tutor", "coach"],
 };
 
 function getAllowedRoles(pathname: string): UserRole[] {
@@ -34,7 +36,7 @@ function getAllowedRoles(pathname: string): UserRole[] {
       (path) => pathname === path || pathname.startsWith(`${path}/`)
     );
 
-  return match ? MODULE_ROLES[match] : ["owner"];
+  return match ? MODULE_ROLES[match] : ["owner", "admin"];
 }
 
 export default function DashboardLayout({

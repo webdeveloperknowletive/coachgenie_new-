@@ -75,3 +75,8 @@ class TenantNotFoundError(AppException):
         # because a missing/invalid tenant header is a client input error,
         # not an authorization failure.
         super().__init__(status.HTTP_400_BAD_REQUEST, message)
+
+
+class ValidationError(AppException):
+    def __init__(self, detail: str = "Invalid data provided."):
+        super().__init__(status.HTTP_422_UNPROCESSABLE_ENTITY, detail)

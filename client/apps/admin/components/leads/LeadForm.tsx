@@ -10,13 +10,13 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 
 // ─── Validation schema ────────────────────────────────────────────────────────
 const schema = z.object({
-  name:                 z.string().min(1, "Name is required"),
+  name:                 z.string().min(1, "Name is required").regex(/^[a-zA-Z\s.'-]+$/, "Name cannot contain numbers"),
   email:                z.string().email("Invalid email").or(z.literal("")),
-  phone:                z.string().min(1, "Phone is required"),
+  phone:                z.string().min(1, "Phone is required").regex(/^\d{10}$/, "Phone number must be exactly 10 digits"),
   source:               z.string().min(1, "Source is required"),
   subject:              z.string().min(1, "Interested course is required"),
-  parentName:           z.string().optional(),
-  parentContactNumber:  z.string().optional(),
+  parentName:           z.string().regex(/^[a-zA-Z\s.'-]+$/, "Parent name cannot contain numbers").optional().or(z.literal("")),
+  parentContactNumber:  z.string().regex(/^\d{10}$/, "Parent contact must be exactly 10 digits").optional().or(z.literal("")),
   schoolName:           z.string().optional(),
   grade:                z.string().optional(),
   notes:                z.string().optional(),
@@ -197,15 +197,35 @@ export function LeadForm({
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Field label={t("Full Name")} required error={errors.name?.message}>
-          <input data-testid="lead-name" {...register("name")} placeholder={t("Student's full name")} className={inputCls(!!errors.name)} />
+          <input
+            data-testid="lead-name"
+            {...register("name", {
+              onChange: (e) => {
+                e.target.value = e.target.value.replace(/[^a-zA-Z\s.'-]/g, "");
+              },
+            })}
+            placeholder={t("Student's full name")}
+            className={inputCls(!!errors.name)}
+          />
         </Field>
 
         <Field label={t("Email")} error={errors.email?.message}>
           <input data-testid="lead-email" {...register("email")} type="email" placeholder="student@example.com" className={inputCls(!!errors.email)} />
         </Field>
 
-        <Field label={t("Phone")} required error={errors.phone?.message}>
-          <input data-testid="lead-phone" {...register("phone")} placeholder="+91 98765 43210" className={inputCls(!!errors.phone)} />
+        <Field label={t("Phone (10 Digits)")} required error={errors.phone?.message}>
+          <input
+            data-testid="lead-phone"
+            maxLength={10}
+            inputMode="numeric"
+            {...register("phone", {
+              onChange: (e) => {
+                e.target.value = e.target.value.replace(/\D/g, "").slice(0, 10);
+              },
+            })}
+            placeholder="9876543210"
+            className={inputCls(!!errors.phone)}
+          />
         </Field>
 
         <Field label={t("Grade")} error={errors.grade?.message}>
@@ -302,11 +322,29 @@ export function LeadForm({
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Field label={t("Parent Name")} error={errors.parentName?.message}>
-          <input {...register("parentName")} placeholder={t("Parent / guardian name")} className={inputCls(!!errors.parentName)} />
+          <input
+            {...register("parentName", {
+              onChange: (e) => {
+                e.target.value = e.target.value.replace(/[^a-zA-Z\s.'-]/g, "");
+              },
+            })}
+            placeholder={t("Parent / guardian name")}
+            className={inputCls(!!errors.parentName)}
+          />
         </Field>
 
-        <Field label={t("Parent Contact")} error={errors.parentContactNumber?.message}>
-          <input {...register("parentContactNumber")} placeholder="+91 98765 43210" className={inputCls(!!errors.parentContactNumber)} />
+        <Field label={t("Parent Contact (10 Digits)")} error={errors.parentContactNumber?.message}>
+          <input
+            maxLength={10}
+            inputMode="numeric"
+            {...register("parentContactNumber", {
+              onChange: (e) => {
+                e.target.value = e.target.value.replace(/\D/g, "").slice(0, 10);
+              },
+            })}
+            placeholder="9876543210"
+            className={inputCls(!!errors.parentContactNumber)}
+          />
         </Field>
       </div>
 

@@ -22,8 +22,8 @@ const LEVELS = [
   "bg-blue-600 dark:bg-blue-500",
 ];
 
-export function AttendanceHeatmap() {
-  const attendance = useMemo(generateMockAttendance, []);
+export function AttendanceHeatmap({ data }: { data?: Record<string, number> } = {}) {
+  const attendance = useMemo(() => data ?? generateMockAttendance(), [data]);
 
   const days   = eachDayOfInterval({ start: subDays(new Date(), 180), end: new Date() });
   const padStart = getDay(days[0]!);

@@ -11,9 +11,9 @@ def sanitize_phone(v: Optional[str]) -> Optional[str]:
     v_clean = str(v).strip()
     if not v_clean:
         return None
-    digits = re.sub(r"[^\d+]", "", v_clean)
-    if len(re.sub(r"\D", "", digits)) < 7:
-        raise ValueError("Phone number must have at least 7 digits.")
+    digits = re.sub(r"\D", "", v_clean)
+    if len(digits) != 10:
+        raise ValueError("Phone number must be exactly 10 digits.")
     return digits
 
 
@@ -46,8 +46,19 @@ class StudentCreate(BaseModel):
     current_class: Optional[str] = None
     target_exam: Optional[str] = None
     subjects: list[str] = []
+    custom_fields: Optional[dict] = Field(default_factory=dict)
     batch_id: Optional[uuid.UUID] = None
     joined_at: Optional[date] = None
+
+    @field_validator("first_name", "last_name", "parent_name")
+    @classmethod
+    def validate_name_no_digits(cls, v: Optional[str]) -> Optional[str]:
+        if v:
+            v_clean = v.strip()
+            if re.search(r"\d", v_clean):
+                raise ValueError("Name cannot contain numbers.")
+            return v_clean
+        return v
 
     @field_validator("date_of_birth")
     @classmethod
@@ -85,7 +96,18 @@ class StudentUpdate(BaseModel):
     current_class: Optional[str] = None
     target_exam: Optional[str] = None
     subjects: Optional[list[str]] = None
+    custom_fields: Optional[dict] = None
     is_active: Optional[bool] = None
+
+    @field_validator("first_name", "last_name", "parent_name")
+    @classmethod
+    def validate_name_no_digits(cls, v: Optional[str]) -> Optional[str]:
+        if v:
+            v_clean = v.strip()
+            if re.search(r"\d", v_clean):
+                raise ValueError("Name cannot contain numbers.")
+            return v_clean
+        return v
 
     @field_validator("date_of_birth")
     @classmethod
@@ -125,6 +147,7 @@ class StudentOut(BaseModel):
     current_class: Optional[str] = None
     target_exam: Optional[str] = None
     subjects: list[str] = []
+    custom_fields: Optional[dict] = Field(default_factory=dict)
     batch_ids: list[str] = []
     admission_id: Optional[uuid.UUID] = None
     joined_at: Optional[Any] = None
@@ -133,39 +156,40 @@ class StudentOut(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def extract_batch_ids(cls, obj: Any) -> Any:
-        # Only apply when validating from ORM object (not a dict)
-        if hasattr(obj, "batch_enrollments"):
-            enrollments = obj.batch_enrollments
-            # Handle both loaded and unloaded relationships safely
-            try:
-                batch_ids = [str(e.batch_id) for e in (enrollments or [])]
-            except Exception:
-                batch_ids = []
-            # Pydantic needs a dict to merge extra fields
+        if not isinstance(obj, dict):
+            d = getattr(obj, "__dict__", {})
+            batch_ids = []
+            if "batch_enrollments" in d and d["batch_enrollments"]:
+                try:
+                    batch_ids = [str(e.batch_id) for e in d["batch_enrollments"]]
+                except Exception:
+                    batch_ids = []
+
             data = {
-                "id":            obj.id,
-                "enrollment_no": obj.enrollment_no,
-                "first_name":    obj.first_name,
-                "last_name":     obj.last_name,
-                "email":         obj.email,
-                "phone":         obj.phone,
-                "gender":        obj.gender,
-                "date_of_birth": obj.date_of_birth,
-                "address":       obj.address,
-                "city":          obj.city,
-                "state":         obj.state,
-                "pincode":       obj.pincode,
-                "parent_name":   obj.parent_name,
-                "parent_phone":  obj.parent_phone,
-                "parent_email":  obj.parent_email,
-                "school_name":   obj.school_name,
-                "current_class": obj.current_class,
-                "target_exam":   obj.target_exam,
-                "subjects":      obj.subjects or [],
-                "is_active":     obj.is_active,
-                "admission_id":  obj.admission_id,
-                "joined_at":     obj.joined_at,
-                "batch_ids":     batch_ids,  # ← populated from relationship
+                "id":            getattr(obj, "id", None),
+                "enrollment_no": getattr(obj, "enrollment_no", ""),
+                "first_name":    getattr(obj, "first_name", ""),
+                "last_name":     getattr(obj, "last_name", ""),
+                "email":         getattr(obj, "email", None),
+                "phone":         getattr(obj, "phone", None),
+                "gender":        getattr(obj, "gender", None),
+                "date_of_birth": getattr(obj, "date_of_birth", None),
+                "address":       getattr(obj, "address", None),
+                "city":          getattr(obj, "city", None),
+                "state":         getattr(obj, "state", None),
+                "pincode":       getattr(obj, "pincode", None),
+                "parent_name":   getattr(obj, "parent_name", None),
+                "parent_phone":  getattr(obj, "parent_phone", None),
+                "parent_email":  getattr(obj, "parent_email", None),
+                "school_name":   getattr(obj, "school_name", None),
+                "current_class": getattr(obj, "current_class", None),
+                "target_exam":   getattr(obj, "target_exam", None),
+                "subjects":      getattr(obj, "subjects", []) or [],
+                "custom_fields": getattr(obj, "custom_fields", {}) or {},
+                "is_active":     getattr(obj, "is_active", True),
+                "admission_id":  getattr(obj, "admission_id", None),
+                "joined_at":     getattr(obj, "joined_at", None),
+                "batch_ids":     batch_ids,
             }
             return data
         return obj

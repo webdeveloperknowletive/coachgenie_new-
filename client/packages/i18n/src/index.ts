@@ -40,3 +40,4 @@ export const i18n = new I18nManager();
 export default i18n;
 
 export * from "./translations";
+export * from "./transliterator";

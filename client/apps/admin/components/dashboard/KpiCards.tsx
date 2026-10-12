@@ -20,6 +20,7 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { authHeaders } from "@/lib/auth-headers";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { api } from "@/lib/api";
 
 const API = "/api/proxy";
 
@@ -48,9 +49,7 @@ export function KpiCards() {
       if (!silent) setLoading(true);
 
       // Fetch generalized dashboard data for current role
-      const dashRes = await fetch(`${API}/dashboard/`, { headers: authHeaders() })
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null);
+      const dashRes = (await api.get<any>("/dashboard/").catch(() => null)) as any;
 
       if (dashRes && dashRes.data) {
         setDashboardData(dashRes.data);
@@ -59,17 +58,13 @@ export function KpiCards() {
       // If owner or admin, also fetch financial metrics
       if (role === "owner" || role === "admin") {
         const [feeRes, invRes] = await Promise.all([
-          fetch(`${API}/fees/revenue/summary`, { headers: authHeaders() })
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null),
-          fetch(`${API}/fees/invoices`, { headers: authHeaders() })
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null),
+          api.get<any>("/fees/revenue/summary").catch(() => null) as Promise<any>,
+          api.get<any>("/fees/invoices").catch(() => null) as Promise<any>,
         ]);
 
-        if (feeRes) setFeeSummary(feeRes.data ?? feeRes);
+        if (feeRes) setFeeSummary(feeRes?.data ?? feeRes);
         if (invRes) {
-          const invList = Array.isArray(invRes) ? invRes : invRes.data ?? invRes.items ?? [];
+          const invList = Array.isArray(invRes) ? invRes : invRes?.data ?? invRes?.items ?? [];
           setInvoices(invList);
         }
       }

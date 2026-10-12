@@ -76,9 +76,12 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
 export type UserRole =
+  | "super_admin"
   | "owner"
+  | "admin"
   | "counselor"
   | "tutor"
+  | "coach"
   | "parent"
   | "student";
 

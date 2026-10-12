@@ -15,6 +15,14 @@ export default function FeeStructuresPage() {
   const [expanded, setExpanded]         = useState<string | null>(null);
 
   async function handleCreate(data: FeeStructureFormValues) {
+    const isDuplicate = feeStructures.some(
+      (fs) => fs.name.trim().toLowerCase() === data.name.trim().toLowerCase()
+    );
+    if (isDuplicate) {
+      toast.error("A fee structure with this name already exists.");
+      return;
+    }
+
     await new Promise(r => setTimeout(r, 500));
     addFeeStructure({
       ...data,
@@ -25,8 +33,16 @@ export default function FeeStructuresPage() {
   }
 
   async function handleEdit(data: FeeStructureFormValues) {
-    await new Promise(r => setTimeout(r, 500));
     if (!editTarget) return;
+    const isDuplicate = feeStructures.some(
+      (fs) => fs.id !== editTarget.id && fs.name.trim().toLowerCase() === data.name.trim().toLowerCase()
+    );
+    if (isDuplicate) {
+      toast.error("Another fee structure with this name already exists.");
+      return;
+    }
+
+    await new Promise(r => setTimeout(r, 500));
     updateFeeStructure(editTarget.id, {
       ...data,
       installments: data.installments.map((inst, i) => ({

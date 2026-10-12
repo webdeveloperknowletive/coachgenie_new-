@@ -5,6 +5,7 @@ import {
   type SupportedLanguage,
   TRANSLATIONS,
   translate as tHelper,
+  transliterateText,
 } from "@coachgenie/i18n";
 import i18n from "@coachgenie/i18n";
 
@@ -30,6 +31,8 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   const [language, setLanguageState] = useState<SupportedLanguage>("en");
   const [isPending, startTransition] = useTransition();
   const originalTextMap = useRef<Map<Node, string>>(new Map());
+  const originalPlaceholderMap = useRef<WeakMap<HTMLElement, string>>(new WeakMap());
+  const originalTitleMap = useRef<WeakMap<HTMLElement, string>>(new WeakMap());
 
   // Load language from localStorage on client mount
   useEffect(() => {
@@ -46,6 +49,11 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   // Comprehensive dynamic text & attribute translation observer
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    // If English and nothing was previously translated, skip DOM traversal
+    if (language === "en" && originalTextMap.current.size === 0) {
+      return;
+    }
 
     const dict: Record<string, string> = TRANSLATIONS[language] || TRANSLATIONS.en;
     
@@ -74,18 +82,24 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
+      // 3. Dynamic phonetic transliteration for any un-translated words/names entered by users
+      if (language !== "en") {
+        result = transliterateText(result);
+      }
+
       return result;
     };
 
     const processElementAttributes = (el: HTMLElement) => {
-      if (el.closest('[data-no-translate]')) return;
+      if (el.closest?.('[data-no-translate]')) return;
 
       // Translate placeholders
       if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-        const origPlaceholder = el.getAttribute("data-orig-placeholder") ?? el.placeholder;
+        const stored = originalPlaceholderMap.current.get(el);
+        const origPlaceholder = stored ?? el.placeholder;
         if (origPlaceholder) {
-          if (!el.hasAttribute("data-orig-placeholder")) {
-            el.setAttribute("data-orig-placeholder", origPlaceholder);
+          if (!stored) {
+            originalPlaceholderMap.current.set(el, origPlaceholder);
           }
           if (language === "en") {
             el.placeholder = origPlaceholder;
@@ -96,10 +110,11 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Translate titles
-      const origTitle = el.getAttribute("data-orig-title") ?? el.getAttribute("title");
-      if (origTitle && !el.closest('[data-testid="language-switcher-container"]')) {
-        if (!el.hasAttribute("data-orig-title")) {
-          el.setAttribute("data-orig-title", origTitle);
+      const storedTitle = originalTitleMap.current.get(el);
+      const origTitle = storedTitle ?? el.getAttribute("title");
+      if (origTitle && !el.closest?.('[data-testid="language-switcher-container"]')) {
+        if (!storedTitle) {
+          originalTitleMap.current.set(el, origTitle);
         }
         if (language === "en") {
           el.setAttribute("title", origTitle);
@@ -117,7 +132,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
       // Ignore script, style, code, pre, textarea, and data-no-translate elements
       if (
         node.parentElement &&
-        (node.parentElement.closest('[data-no-translate]') ||
+        (node.parentElement.closest?.('[data-no-translate]') ||
           ["SCRIPT", "STYLE", "CODE", "PRE", "TEXTAREA"].includes(
             node.parentElement.tagName
           ))
@@ -132,8 +147,10 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        const original = originalTextMap.current.get(node) ?? node.nodeValue;
-        if (!originalTextMap.current.has(node)) {
+        let original = originalTextMap.current.get(node);
+        // If nodeValue is not Devanagari (i.e. fresh English text from React state update), update original map
+        if (!original || (!/[\u0900-\u097F]/.test(node.nodeValue) && node.nodeValue !== original)) {
+          original = node.nodeValue;
           originalTextMap.current.set(node, original);
         }
 
@@ -152,8 +169,12 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    // Run initial pass on full document
+    // Run pass on full document
     processNode(document.body);
+
+    if (language === "en") {
+      return;
+    }
 
     // Observe dynamic mutations (e.g. modals opening, async table data, tabs switching)
     const observer = new MutationObserver((mutations) => {

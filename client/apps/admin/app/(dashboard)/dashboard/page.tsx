@@ -56,14 +56,21 @@ const ALL_MODULES = [
   { name: "Institute Settings", href: "/settings", icon: Settings, color: "text-violet-600 dark:text-violet-400", bg: "bg-violet-500/10", roles: ["owner", "admin"] },
 ];
 
+import { SuperAdminDashboard } from "@/components/dashboard/SuperAdminDashboard";
+
 export default function DashboardPage() {
   const { t } = useLanguage();
   const user = useAuthStore((s) => s.user);
   const storeRole = useAuthStore((s) => s.role);
 
   const rawRole = (user?.role || storeRole || "owner").toLowerCase();
-  const role = rawRole === "super_admin" ? "owner" : rawRole;
 
+  // If Super Admin, render the dedicated Platform Management Dashboard
+  if (rawRole === "super_admin") {
+    return <SuperAdminDashboard />;
+  }
+
+  const role = rawRole;
   const userName = `${user?.first_name ?? ""} ${user?.last_name ?? ""}`.trim() || user?.email || "User";
 
   // Filter modules visible to this role

@@ -86,8 +86,12 @@ class NotificationLogOut(BaseModel):
     id: uuid.UUID
     channel: str
     recipient_ref: str
+    subject: Optional[str] = None
+    body: Optional[str] = None
     status: str
     sent_at: Optional[datetime] = None
+    read_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
     error_msg: Optional[str] = None
 
     class Config:

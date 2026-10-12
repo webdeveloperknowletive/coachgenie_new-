@@ -16,6 +16,11 @@ class Student(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    parent_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
     admission_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("admissions.id", ondelete="SET NULL"),
@@ -42,6 +47,7 @@ class Student(Base):
     current_class: Mapped[str] = mapped_column(String(50), nullable=True)
     target_exam: Mapped[str] = mapped_column(String(150), nullable=True)
     subjects: Mapped[list] = mapped_column(JSON, nullable=True, default=list)
+    custom_fields: Mapped[dict] = mapped_column(JSON, nullable=True, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     left_at = mapped_column(Date, nullable=True)
     created_at = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))

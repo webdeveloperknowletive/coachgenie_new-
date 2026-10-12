@@ -10,8 +10,8 @@ const BACKEND = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1
 
 
 
-const ACCESS_TOKEN_MAX_AGE  = 60 * 15;
-const REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 7;
+const ACCESS_TOKEN_MAX_AGE  = 60 * 60 * 24;        // 24 hours
+const REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
 export async function POST() {
   console.log("Refresh route reached");

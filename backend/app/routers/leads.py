@@ -1,12 +1,20 @@
 from datetime import date
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any
 from app.dependencies import get_tenant, require_roles, DB
-from app.schemas.lead import LeadCreate, LeadUpdate, LeadOut, ActivityCreate, ActivityOut
+from app.schemas.lead import (
+    LeadCreate,
+    LeadUpdate,
+    LeadOut,
+    ActivityCreate,
+    ActivityOut,
+    CRMPipelineConfig,
+)
 from app.services import lead as lead_service
 from app.services import admission as admission_service
 from app.services.inbox_notification import create_notification
+from app.utils.exceptions import ConflictError, NotFoundError
 from fastapi import Request
 
 
@@ -22,6 +30,35 @@ async def lead_funnel(
     from app.services.lead import get_funnel
     data = await get_funnel(db, str(tenant.id))
     return {"success": True, "data": data}
+
+
+@router.get("/pipeline/config")
+async def get_pipeline_config(
+    db: DB,
+    tenant=Depends(get_tenant),
+    current_user=Depends(require_roles("owner", "admin", "counselor")),
+):
+    config = await lead_service.get_crm_pipeline(db, str(tenant.id))
+    return {"success": True, "data": config}
+
+
+@router.put("/pipeline/config")
+async def update_pipeline_config(
+    request: Request,
+    body: CRMPipelineConfig,
+    db: DB,
+    tenant=Depends(get_tenant),
+    current_user=Depends(require_roles("owner", "admin")),
+):
+    ip_addr = request.client.host if request.client else None
+    updated = await lead_service.update_crm_pipeline(
+        db,
+        str(tenant.id),
+        body.model_dump(),
+        actor_id=str(current_user.id),
+        ip_address=ip_addr,
+    )
+    return {"success": True, "data": updated}
 
 
 
@@ -302,6 +339,10 @@ class ConvertLeadBody(BaseModel):
     applied_course: Optional[str] = None
     academic_year: Optional[str] = None
     remarks: Optional[str] = None
+    fee_amount: Optional[float] = None
+    fee_paid: Optional[float] = None
+    payment_mode: Optional[str] = None
+    payment_installment_schedule: Optional[Any] = None
 
 @router.post("/{lead_id}/convert", status_code=201)
 async def convert_lead(
@@ -362,9 +403,17 @@ async def convert_lead(
                 "enrollment_no":    student.enrollment_no,
             }
         }
+    except (ConflictError, NotFoundError) as e:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=str(e.detail if hasattr(e, "detail") else e))
+    except HTTPException:
+        await db.rollback()
+        raise
     except Exception as e:
         await db.rollback()
-        raise HTTPException(status_code=400, detail="Conversion failed. Please try again.")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail=f"Conversion failed: {str(e)}")
 
 
 # ── Activities ─────────────────────────────────────────────────────────────────

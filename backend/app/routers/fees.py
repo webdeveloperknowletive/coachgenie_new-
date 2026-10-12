@@ -1,6 +1,6 @@
 from typing import Optional
 from fastapi import APIRouter, Depends
-from app.dependencies import get_tenant, require_roles, DB
+from app.dependencies import get_tenant, require_roles, require_permission, DB
 from app.schemas.fee import FeeStructureCreate, FeeInvoiceCreate, FeeInvoiceOut, PaymentCreate, PaymentOut
 from app.services import fee as fee_service
 from sqlalchemy import select, and_
@@ -52,7 +52,7 @@ async def list_structures(
 async def list_all_invoices(
     db: DB,
     tenant=Depends(get_tenant),
-    current_user=Depends(require_roles("owner", "counselor")),
+    current_user=Depends(require_permission("fees", "view")),
 ):
     invoices = await fee_service.get_all_invoices(db, str(tenant.id))
     return {"success": True, "data": [FeeInvoiceOut.model_validate(i) for i in invoices]}
@@ -171,14 +171,8 @@ async def get_payments(
             if not s or str(s.id) != str(invoice.student_id):
                 raise HTTPException(status_code=403, detail="Access denied")
         elif current_user.role == "parent":
-            res = await db.execute(
-                select(Student).where(
-                    and_(Student.tenant_id == tenant.id, Student.parent_email == current_user.email)
-                )
-            )
-            s = res.scalar_one_or_none()
-            if not s or str(s.id) != str(invoice.student_id):
-                raise HTTPException(status_code=403, detail="Access denied")
+            from app.services.parent import verify_parent_child_access
+            await verify_parent_child_access(db, str(tenant.id), current_user, str(invoice.student_id))
 
     payments = await fee_service.get_payments(db, str(tenant.id), invoice_id)
     return {"success": True, "data": [PaymentOut.model_validate(p) for p in payments]}
@@ -198,7 +192,7 @@ async def get_payment_history(
     db: DB,
     tenant=Depends(get_tenant),
     student_id: Optional[str] = None,
-    current_user=Depends(require_roles("owner", "counselor", "tutor", "student")),
+    current_user=Depends(require_roles("owner", "counselor", "tutor", "student", "parent")),
 ):
     if current_user.role == "student":
         res = await db.execute(
@@ -210,9 +204,41 @@ async def get_payment_history(
         if not s:
             raise HTTPException(status_code=403, detail="Access denied")
         student_id = str(s.id)
+    elif current_user.role == "parent":
+        if not student_id:
+            raise HTTPException(status_code=400, detail="student_id is required for parent payment history")
+        from app.services.parent import verify_parent_child_access
+        await verify_parent_child_access(db, str(tenant.id), current_user, student_id)
 
     payments = await fee_service.get_all_payments_for_tenant(db, str(tenant.id), student_id)
     return {"success": True, "data": payments}
+
+
+@router.get("/payments/{payment_id}/receipt")
+async def get_receipt(
+    payment_id: str,
+    db: DB,
+    tenant=Depends(get_tenant),
+    current_user=Depends(require_roles("owner", "admin", "counselor", "student", "parent")),
+):
+    receipt_data = await fee_service.get_payment_receipt(db, str(tenant.id), payment_id)
+
+    # IDOR Check for student and parent
+    if current_user.role in ("student", "parent"):
+        if current_user.role == "student":
+            st = await db.scalar(
+                select(Student).where(
+                    and_(Student.tenant_id == tenant.id, Student.user_id == current_user.id)
+                )
+            )
+            if not st or str(st.id) != str(receipt_data["student_id"]):
+                raise HTTPException(status_code=403, detail="Access denied")
+        elif current_user.role == "parent":
+            from app.services.parent import verify_parent_child_access
+            await verify_parent_child_access(db, str(tenant.id), current_user, str(receipt_data["student_id"]))
+
+    from app.schemas.fee import ReceiptOut
+    return {"success": True, "data": ReceiptOut.model_validate(receipt_data)}
 
 
 

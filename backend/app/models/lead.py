@@ -37,6 +37,7 @@ class Lead(Base):
     # ── NEW COLUMNS ──────────────────────────────────────────────────────────
     board_name: Mapped[str] = mapped_column(String(100), nullable=True)
     subjects: Mapped[list] = mapped_column(JSON, nullable=True, default=list)
+    custom_fields: Mapped[dict] = mapped_column(JSON, nullable=True, default=dict)
     batch_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("batches.id", ondelete="SET NULL"),

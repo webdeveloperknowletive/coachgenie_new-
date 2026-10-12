@@ -439,9 +439,12 @@ async def get_tenant_details(
 
 async def ensure_demo_tenant():
     """
-    Guarantees the default 'demo' tenant and 'owner@demo.com' user exist in the database.
-    Prevents 400 Bad Request TenantNotFoundError on fresh or reset databases.
+    Guarantees the default 'demo' tenant and standard development accounts exist in the database.
+    Prevents 401/400 Bad Request TenantNotFoundError on fresh or reset databases.
     """
+    from app.utils.security import hash_password
+    from app.models.student import Student
+
     async with AsyncSessionLocal() as db:
         res = await db.execute(select(Tenant).where(Tenant.subdomain == "demo"))
         tenant = res.scalar_one_or_none()
@@ -456,10 +459,25 @@ async def ensure_demo_tenant():
             db.add(tenant)
             await db.flush()
 
+        # 1. Super Admin (Platform scope)
+        res_sa = await db.execute(select(User).where(User.email == "superadmin@coachgenie.com"))
+        sa = res_sa.scalar_one_or_none()
+        if not sa:
+            sa = User(
+                tenant_id=tenant.id,
+                email="superadmin@coachgenie.com",
+                password_hash=hash_password("SuperAdmin123!"),
+                first_name="Platform",
+                last_name="SuperAdmin",
+                role="super_admin",
+                is_active=True,
+            )
+            db.add(sa)
+
+        # 2. Institute Owner
         res_user = await db.execute(select(User).where(User.email == "owner@demo.com"))
         user = res_user.scalar_one_or_none()
         if not user:
-            from app.utils.security import hash_password
             user = User(
                 tenant_id=tenant.id,
                 email="owner@demo.com",
@@ -470,4 +488,47 @@ async def ensure_demo_tenant():
                 is_active=True,
             )
             db.add(user)
+
+        # 3. Student User
+        res_stu = await db.execute(select(User).where(User.email == "student@demo.com"))
+        stu_user = res_stu.scalar_one_or_none()
+        if not stu_user:
+            stu_user = User(
+                tenant_id=tenant.id,
+                email="student@demo.com",
+                password_hash=hash_password("StudentPass123!"),
+                first_name="Arjun",
+                last_name="Singh",
+                role="student",
+                is_active=True,
+            )
+            db.add(stu_user)
+            await db.flush()
+
+        # 4. Parent User
+        res_par = await db.execute(select(User).where(User.email == "parent@demo.com"))
+        par_user = res_par.scalar_one_or_none()
+        if not par_user:
+            par_user = User(
+                tenant_id=tenant.id,
+                email="parent@demo.com",
+                password_hash=hash_password("ParentPass123!"),
+                first_name="Suresh",
+                last_name="Singh",
+                role="parent",
+                is_active=True,
+            )
+            db.add(par_user)
+            await db.flush()
+
+        # 5. Link Student Record to Student & Parent Users
+        res_st_rec = await db.execute(select(Student).where(Student.tenant_id == tenant.id))
+        st_rec = res_st_rec.scalars().first()
+        if st_rec:
+            if not st_rec.user_id and stu_user:
+                st_rec.user_id = stu_user.id
+            if not st_rec.parent_user_id and par_user:
+                st_rec.parent_user_id = par_user.id
+                st_rec.parent_email = par_user.email
+
         await db.commit()

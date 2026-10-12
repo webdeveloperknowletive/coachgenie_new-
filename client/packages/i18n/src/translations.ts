@@ -2120,7 +2120,16 @@ export const TRANSLATIONS: Record<SupportedLanguage, Record<string, string>> = {
   }
 };
 
+import { transliterateText } from "./transliterator";
+
 export function translate(key: string, lang: SupportedLanguage = "en"): string {
+  if (!key) return key;
   const dictionary = TRANSLATIONS[lang] || TRANSLATIONS.en;
-  return dictionary[key] || key;
+  if (dictionary[key]) {
+    return dictionary[key];
+  }
+  if (lang !== "en") {
+    return transliterateText(key);
+  }
+  return key;
 }

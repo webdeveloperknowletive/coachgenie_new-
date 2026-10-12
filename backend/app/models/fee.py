@@ -46,6 +46,32 @@ class FeeInvoice(Base):
     student = relationship("Student", back_populates="fee_invoices")
     fee_structure = relationship("FeeStructure", back_populates="invoices")
     payments = relationship("FeePayment", back_populates="invoice", cascade="all, delete-orphan")
+    installments = relationship("FeeInstallment", back_populates="invoice", cascade="all, delete-orphan", order_by="FeeInstallment.installment_no")
+
+
+class FeeInstallment(Base):
+    __tablename__ = "fee_installments"
+    __table_args__ = (
+        UniqueConstraint("invoice_id", "installment_no", name="uq_invoice_installment"),
+        Index("idx_inst_tenant_due", "tenant_id", "due_date", "status"),
+        Index("idx_inst_student", "student_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    invoice_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("fee_invoices.id", ondelete="CASCADE"), nullable=False)
+    student_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    installment_no: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    title: Mapped[str] = mapped_column(String(100), nullable=False)
+    amount_due: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    amount_paid: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0)
+    due_date = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    created_at = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
+    updated_at = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"), onupdate=text("NOW()"))
+
+    invoice = relationship("FeeInvoice", back_populates="installments")
+    student = relationship("Student")
 
 
 class FeePayment(Base):

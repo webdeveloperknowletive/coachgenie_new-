@@ -110,6 +110,7 @@ class FeeInvoiceOut(BaseModel):
 
     # Payment history ledger list
     payments: list[PaymentOut] = []
+    installments: list["FeeInstallmentOut"] = []
 
     model_config = {"from_attributes": True}
 
@@ -131,6 +132,54 @@ class FeeInvoiceOut(BaseModel):
                 instance.admission_id = admission.id
                 if getattr(admission, "payment_installment_schedule", None):
                     instance.payment_installment_schedule = admission.payment_installment_schedule
-        if hasattr(obj, "payments") and obj.payments:
-            instance.payments = [PaymentOut.model_validate(p) for p in obj.payments]
+        if hasattr(obj, "payments"):
+            try:
+                payments_val = getattr(obj, "payments", None)
+                if payments_val:
+                    instance.payments = [PaymentOut.model_validate(p) for p in payments_val]
+            except Exception:
+                pass
+        if hasattr(obj, "installments"):
+            try:
+                inst_val = getattr(obj, "installments", None)
+                if inst_val:
+                    instance.installments = [FeeInstallmentOut.model_validate(inst) for inst in inst_val]
+            except Exception:
+                pass
         return instance
+
+
+class FeeInstallmentOut(BaseModel):
+    id: uuid.UUID
+    installment_no: int
+    title: str
+    amount_due: float
+    amount_paid: float
+    due_date: date
+    status: str
+    model_config = {"from_attributes": True}
+
+
+class ReceiptOut(BaseModel):
+    receipt_no: str
+    payment_id: uuid.UUID
+    invoice_id: uuid.UUID
+    invoice_no: str
+    student_id: uuid.UUID
+    student_name: str
+    enrollment_no: Optional[str] = None
+    grade: Optional[str] = None
+    amount_paid: float
+    payment_mode: str
+    transaction_ref: Optional[str] = None
+    paid_at: datetime
+    notes: Optional[str] = None
+    total_amount_due: float
+    total_amount_paid: float
+    balance_remaining: float
+    institute_name: str
+    institute_subdomain: str
+    institute_phone: Optional[str] = None
+    institute_email: Optional[str] = None
+    institute_address: Optional[str] = None
+    gstin: Optional[str] = None

@@ -54,14 +54,26 @@ async def submit_results(
     results = await exam_service.submit_results(db, str(tenant.id), exam_id, results_data)
     return {"success": True, "data": [ExamResultOut.model_validate(r) for r in results]}
 
+
+@router.post("/{exam_id}/publish", status_code=200)
+async def publish_exam(
+    exam_id: str,
+    db: DB,
+    tenant=Depends(get_tenant),
+    current_user=Depends(require_roles("owner", "admin")),
+):
+    exam = await exam_service.publish_exam_results(db, str(tenant.id), exam_id, actor_id=str(current_user.id))
+    return {"success": True, "data": ExamOut.model_validate(exam)}
+
+
 @router.get("/{exam_id}/results")
 async def get_results(
     exam_id: str,
     db: DB,
     tenant=Depends(get_tenant),
-    current_user=Depends(require_roles("owner", "tutor", "counselor", "student", "parent")),
+    current_user=Depends(require_roles("owner", "admin", "tutor", "counselor", "student", "parent")),
 ):
-    results = await exam_service.get_results(db, str(tenant.id), exam_id)
+    results = await exam_service.get_results(db, str(tenant.id), exam_id, user_role=current_user.role)
     return {"success": True, "data": [ExamResultOut.model_validate(r) for r in results]}
 
 from app.models.student import Student
@@ -85,14 +97,9 @@ async def get_student_exam_results(
         if not linked or str(linked.id) != student_id:
             raise HTTPException(status_code=403, detail="Access denied")
     elif current_user.role == "parent":
-        res = await db.execute(
-            select(Student).where(
-                and_(Student.tenant_id == tenant.id, Student.parent_email == current_user.email)
-            )
-        )
-        linked = res.scalar_one_or_none()
-        if not linked or str(linked.id) != student_id:
-            raise HTTPException(status_code=403, detail="Access denied")
+        from app.services.parent import verify_parent_child_access
+        await verify_parent_child_access(db, str(tenant.id), current_user, student_id)
 
-    results = await exam_service.get_results_for_student(db, str(tenant.id), student_id)
+    is_pub_only = current_user.role in ("student", "parent")
+    results = await exam_service.get_results_for_student(db, str(tenant.id), student_id, is_published_only=is_pub_only)
     return {"success": True, "data": [ExamResultOut.model_validate(r) for r in results]}

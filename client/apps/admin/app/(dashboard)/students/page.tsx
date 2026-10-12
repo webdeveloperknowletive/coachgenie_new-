@@ -53,7 +53,7 @@ function mapStudent(raw: any, fees?: { total: number; paid: number; due: number 
     address: raw.address ?? "",
     dob: dobVal,
     joinedAt: raw.joined_at ?? raw.joinedAt ?? raw.created_at ?? new Date().toISOString(),
-    fees: fees ?? { total: 50000, paid: 50000, due: 0 },
+    fees: fees ?? { total: 0, paid: 0, due: 0 },
     targetExam: raw.target_exam ?? raw.targetExam ?? "",
     schoolName: raw.school_name ?? raw.schoolName ?? "",
     gender: raw.gender ?? "",
@@ -195,41 +195,25 @@ export default function StudentsPage() {
           gender: data.gender || undefined,
           subjects: subjectsList,
         }),
-      }).catch(() => null);
+      });
 
-      if (res && res.ok) {
-        const json = await res.json();
-        const created = json.data ?? json;
-        addStudent(mapStudent(created));
-      } else {
-        // Local fallback creation
-        const newStu: Student = {
-          id: `s-${Date.now()}`,
-          name: data.name,
-          email: data.email ?? "",
-          phone: data.phone ?? "",
-          parentName: data.parentName ?? "",
-          parentPhone: data.parentPhone ?? "",
-          grade: data.grade ?? "10th",
-          subjects: subjectsList,
-          batchIds: [],
-          status: data.status ?? "ACTIVE",
-          address: data.address ?? "",
-          dob: data.dob ?? "",
-          joinedAt: new Date().toISOString(),
-          fees: { total: 50000, paid: 50000, due: 0 },
-          targetExam: data.targetExam ?? "",
-          schoolName: data.schoolName ?? "",
-          gender: data.gender ?? "",
-        };
-        addStudent(newStu);
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        const errorMsg = Array.isArray(errJson?.detail)
+          ? errJson.detail.map((e: any) => e.msg?.replace(/^Value error,\s*/i, "") || e.message || JSON.stringify(e)).join(", ")
+          : (errJson?.detail ?? errJson?.message ?? "Failed to create student");
+        toast.error(errorMsg);
+        return;
       }
 
+      const json = await res.json();
+      const created = json.data ?? json;
+      addStudent(mapStudent(created));
+
       toast.success(t("Student profile created successfully!"));
       setShowForm(false);
-    } catch {
-      toast.success(t("Student profile created successfully!"));
-      setShowForm(false);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to create student");
     }
   }
 

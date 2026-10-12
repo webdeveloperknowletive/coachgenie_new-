@@ -1,49 +1,50 @@
+import uuid
+from datetime import date, datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func, distinct
+from sqlalchemy import select, and_, func, distinct, or_
+
 from app.models.student import Student
-from app.models.batch import Batch, BatchStudent
+from app.models.batch import Batch, BatchStudent, Class
 from app.models.lead import Lead
 from app.models.admission import Admission
 from app.models.exam import Exam, ExamResult
-from app.models.fee import FeeInvoice
+from app.models.fee import FeeInvoice, FeeInstallment
 from app.models.attendance import AttendanceRecord
 from app.models.growth_card import GrowthCard
 from app.models.user import User
-from app.services import fee as fee_service
-import uuid
 
 
-async def get_owner_dashboard(db: AsyncSession, tenant_id: str) -> dict:
-    await fee_service.ensure_invoices_synced(db, tenant_id)
+async def get_owner_dashboard(db: AsyncSession, tenant_id: str | uuid.UUID) -> dict:
+    """
+    Optimized executive dashboard metrics.
+    Decoupled from redundant write-time syncs on read path.
+    """
     t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, str) else tenant_id
 
-    # Total students
-    total_students = (await db.execute(
-        select(func.count()).select_from(Student).where(
+    # 1. Total students (active)
+    total_students = (await db.scalar(
+        select(func.count(Student.id)).where(
             and_(Student.tenant_id == t_uuid, Student.is_active == True)
         )
-    )).scalar()
+    )) or 0
 
-    # Active batches
-    active_batches = (await db.execute(
-        select(func.count()).select_from(Batch).where(
+    # 2. Active batches
+    active_batches = (await db.scalar(
+        select(func.count(Batch.id)).where(
             and_(Batch.tenant_id == t_uuid, Batch.is_active == True)
         )
-    )).scalar()
+    )) or 0
 
-    # Total leads
-    total_leads = (await db.execute(
-        select(func.count()).select_from(Lead).where(Lead.tenant_id == t_uuid)
-    )).scalar()
+    # 3. Leads metrics
+    lead_stats = (await db.execute(
+        select(
+            func.count(Lead.id).label("total"),
+            func.count(Lead.id).filter(Lead.status == "converted").label("converted"),
+            func.count(Lead.id).filter(Lead.assigned_to == None).label("unassigned"),
+        ).where(Lead.tenant_id == t_uuid)
+    )).one()
 
-    # Converted leads
-    converted_leads = (await db.execute(
-        select(func.count()).select_from(Lead).where(
-            and_(Lead.tenant_id == t_uuid, Lead.status == "converted")
-        )
-    )).scalar()
-
-    # Revenue
+    # 4. Revenue metrics (Invoices)
     revenue = (await db.execute(
         select(
             func.coalesce(func.sum(FeeInvoice.amount_due), 0).label("total"),
@@ -51,71 +52,76 @@ async def get_owner_dashboard(db: AsyncSession, tenant_id: str) -> dict:
         ).where(FeeInvoice.tenant_id == t_uuid)
     )).one()
 
-    # Total exams
-    total_exams = (await db.execute(
-        select(func.count()).select_from(Exam).where(Exam.tenant_id == tenant_id)
-    )).scalar()
-
-    # Avg attendance
-    att_result = (await db.execute(
-        select(func.count()).select_from(AttendanceRecord).where(
-            AttendanceRecord.tenant_id == tenant_id
-        )
-    )).scalar()
-
-    present_count = (await db.execute(
-        select(func.count()).select_from(AttendanceRecord).where(
+    # 5. Overdue installments needing attention
+    overdue_count = (await db.scalar(
+        select(func.count(FeeInstallment.id)).where(
             and_(
-                AttendanceRecord.tenant_id == tenant_id,
-                AttendanceRecord.status == "present"
+                FeeInstallment.tenant_id == t_uuid,
+                FeeInstallment.status.in_(["overdue", "pending", "partial"]),
+                FeeInstallment.due_date < date.today(),
             )
         )
-    )).scalar()
+    )) or 0
 
-    avg_attendance = round((present_count / att_result * 100), 2) if att_result > 0 else 0.0
+    # 6. Total exams
+    total_exams = (await db.scalar(
+        select(func.count(Exam.id)).where(Exam.tenant_id == t_uuid)
+    )) or 0
+
+    # 7. Institute attendance aggregation (Single query)
+    att_stats = (await db.execute(
+        select(
+            func.count(AttendanceRecord.id).label("total"),
+            func.count(AttendanceRecord.id).filter(AttendanceRecord.status == "present").label("present"),
+        ).where(AttendanceRecord.tenant_id == t_uuid)
+    )).one()
+
+    avg_attendance = round((att_stats.present / att_stats.total * 100), 2) if att_stats.total > 0 else 0.0
 
     return {
         "total_students": total_students,
         "active_batches": active_batches,
-        "total_leads": total_leads,
-        "converted_leads": converted_leads,
+        "total_leads": lead_stats.total,
+        "converted_leads": lead_stats.converted,
+        "unassigned_leads": lead_stats.unassigned,
         "total_revenue": float(revenue.total),
         "total_collected": float(revenue.paid),
         "pending_revenue": float(revenue.total) - float(revenue.paid),
+        "overdue_installments_count": overdue_count,
         "total_exams": total_exams,
         "avg_attendance_percent": avg_attendance,
     }
 
 
-async def get_tutor_dashboard(db: AsyncSession, tenant_id: str, user_id: str) -> dict:
-    from app.models.batch import Class
-    from datetime import date
-
-    # My classes today
+async def get_tutor_dashboard(db: AsyncSession, tenant_id: str | uuid.UUID, user_id: str | uuid.UUID) -> dict:
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, str) else tenant_id
+    u_uuid = uuid.UUID(str(user_id)) if isinstance(user_id, str) else user_id
     today = date.today()
-    classes_today = (await db.execute(
-        select(func.count()).select_from(Class).where(
+
+    # Classes today
+    classes_today = (await db.scalar(
+        select(func.count(Class.id)).where(
             and_(
-                Class.tenant_id == tenant_id,
-                Class.tutor_id == user_id,
-                func.date(Class.scheduled_at) == today
+                Class.tenant_id == t_uuid,
+                Class.tutor_id == u_uuid,
+                func.date(Class.scheduled_at) == today,
             )
         )
-    )).scalar()
+    )) or 0
 
     # Exams created by tutor
-    exams_created = (await db.execute(
-        select(func.count()).select_from(Exam).where(
-            and_(Exam.tenant_id == tenant_id, Exam.created_by == user_id)
+    exams_created = (await db.scalar(
+        select(func.count(Exam.id)).where(
+            and_(Exam.tenant_id == t_uuid, Exam.created_by == u_uuid)
         )
-    )).scalar()
+    )) or 0
 
     # Avg student score in tutor's exams
-    avg_score = (await db.execute(
+    avg_score = (await db.scalar(
         select(func.coalesce(func.avg(ExamResult.marks_obtained), 0)).where(
-            ExamResult.tenant_id == tenant_id
+            ExamResult.tenant_id == t_uuid
         )
-    )).scalar()
+    )) or 0
 
     return {
         "my_batches": 0,
@@ -126,120 +132,108 @@ async def get_tutor_dashboard(db: AsyncSession, tenant_id: str, user_id: str) ->
     }
 
 
-async def get_student_dashboard(db: AsyncSession, tenant_id: str, student_id: str) -> dict:
+async def get_student_dashboard(db: AsyncSession, tenant_id: str | uuid.UUID, student_id: str | uuid.UUID) -> dict:
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, str) else tenant_id
+    s_uuid = uuid.UUID(str(student_id)) if isinstance(student_id, str) else student_id
+
     # Attendance
-    total_att = (await db.execute(
-        select(func.count()).select_from(AttendanceRecord).where(
+    att_stats = (await db.execute(
+        select(
+            func.count(AttendanceRecord.id).label("total"),
+            func.count(AttendanceRecord.id).filter(AttendanceRecord.status == "present").label("present"),
+        ).where(
             and_(
-                AttendanceRecord.tenant_id == tenant_id,
-                AttendanceRecord.student_id == student_id
+                AttendanceRecord.tenant_id == t_uuid,
+                AttendanceRecord.student_id == s_uuid,
             )
         )
-    )).scalar()
+    )).one()
 
-    present = (await db.execute(
-        select(func.count()).select_from(AttendanceRecord).where(
-            and_(
-                AttendanceRecord.tenant_id == tenant_id,
-                AttendanceRecord.student_id == student_id,
-                AttendanceRecord.status == "present"
-            )
-        )
-    )).scalar()
-
-    att_pct = round((present / total_att * 100), 2) if total_att > 0 else 0.0
+    att_pct = round((att_stats.present / att_stats.total * 100), 2) if att_stats.total > 0 else 0.0
 
     # Exams
-    total_exams = (await db.execute(
-        select(func.count()).select_from(ExamResult).where(
-            ExamResult.student_id == student_id
+    exam_stats = (await db.execute(
+        select(
+            func.count(ExamResult.id).label("total"),
+            func.coalesce(func.avg(ExamResult.marks_obtained), 0).label("avg_marks"),
+        ).where(
+            and_(
+                ExamResult.tenant_id == t_uuid,
+                ExamResult.student_id == s_uuid,
+            )
         )
-    )).scalar()
-
-    avg_score = (await db.execute(
-        select(func.coalesce(func.avg(ExamResult.marks_obtained), 0)).where(
-            ExamResult.student_id == student_id
-        )
-    )).scalar()
+    )).one()
 
     # Pending fees
-    pending = (await db.execute(
+    pending = (await db.scalar(
         select(
             func.coalesce(
                 func.sum(FeeInvoice.amount_due - FeeInvoice.amount_paid), 0
             )
         ).where(
             and_(
-                FeeInvoice.tenant_id == tenant_id,
-                FeeInvoice.student_id == student_id,
-                FeeInvoice.status.in_(["pending", "partial", "overdue"])
+                FeeInvoice.tenant_id == t_uuid,
+                FeeInvoice.student_id == s_uuid,
+                FeeInvoice.status.in_(["pending", "partial", "overdue"]),
             )
         )
-    )).scalar()
+    )) or 0
 
     # Batches
-    batches = (await db.execute(
-        select(func.count()).select_from(BatchStudent).where(
-            BatchStudent.student_id == student_id
-        )
-    )).scalar()
-
-    # Growth cards
-    growth_cards = (await db.execute(
-        select(func.count()).select_from(GrowthCard).where(
+    batches = (await db.scalar(
+        select(func.count(BatchStudent.batch_id)).where(
             and_(
-                GrowthCard.tenant_id == tenant_id,
-                GrowthCard.student_id == student_id
+                BatchStudent.tenant_id == t_uuid,
+                BatchStudent.student_id == s_uuid,
             )
         )
-    )).scalar()
+    )) or 0
+
+    # Growth cards
+    growth_cards = (await db.scalar(
+        select(func.count(GrowthCard.id)).where(
+            and_(
+                GrowthCard.tenant_id == t_uuid,
+                GrowthCard.student_id == s_uuid,
+            )
+        )
+    )) or 0
 
     return {
         "my_batches": batches,
         "attendance_percent": att_pct,
-        "total_exams": total_exams,
-        "avg_score": round(float(avg_score), 2),
+        "total_exams": exam_stats.total,
+        "avg_score": round(float(exam_stats.avg_marks), 2),
         "pending_fees": float(pending),
         "growth_cards": growth_cards,
     }
 
 
-async def get_counselor_dashboard(db: AsyncSession, tenant_id: str) -> dict:
-    total_leads = (await db.execute(
-        select(func.count()).select_from(Lead).where(Lead.tenant_id == tenant_id)
-    )).scalar()
+async def get_counselor_dashboard(db: AsyncSession, tenant_id: str | uuid.UUID) -> dict:
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, str) else tenant_id
 
-    new_leads = (await db.execute(
-        select(func.count()).select_from(Lead).where(
-            and_(Lead.tenant_id == tenant_id, Lead.status == "new")
-        )
-    )).scalar()
+    lead_stats = (await db.execute(
+        select(
+            func.count(Lead.id).label("total"),
+            func.count(Lead.id).filter(Lead.status == "new").label("new_leads"),
+            func.count(Lead.id).filter(Lead.status == "follow_up").label("follow_up"),
+            func.count(Lead.id).filter(Lead.status == "converted").label("converted"),
+        ).where(Lead.tenant_id == t_uuid)
+    )).one()
 
-    follow_up = (await db.execute(
-        select(func.count()).select_from(Lead).where(
-            and_(Lead.tenant_id == tenant_id, Lead.status == "follow_up")
-        )
-    )).scalar()
-
-    converted = (await db.execute(
-        select(func.count()).select_from(Lead).where(
-            and_(Lead.tenant_id == tenant_id, Lead.status == "converted")
-        )
-    )).scalar()
-
-    pending_admissions = (await db.execute(
-        select(func.count()).select_from(Admission).where(
+    pending_admissions = (await db.scalar(
+        select(func.count(Admission.id)).where(
             and_(
-                Admission.tenant_id == tenant_id,
-                Admission.status == "pending"
+                Admission.tenant_id == t_uuid,
+                Admission.status == "pending",
             )
         )
-    )).scalar()
+    )) or 0
 
     return {
-        "total_leads": total_leads,
-        "new_leads": new_leads,
-        "follow_up_leads": follow_up,
-        "converted_leads": converted,
+        "total_leads": lead_stats.total,
+        "new_leads": lead_stats.new_leads,
+        "follow_up_leads": lead_stats.follow_up,
+        "converted_leads": lead_stats.converted,
         "pending_admissions": pending_admissions,
     }

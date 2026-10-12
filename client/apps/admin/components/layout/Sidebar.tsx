@@ -5,9 +5,9 @@ import {
   LayoutDashboard, Users, CalendarDays, CheckSquare,
   CreditCard, Settings, GraduationCap, ChevronLeft,
   UserPlus, FileCheck, BookOpen, ClipboardList, IndianRupee, Bell, Sparkles, ExternalLink,
+  Building2, Layers, Sliders, Activity, Eye, ShieldCheck, Zap, Bot, Brain, HeartPulse, Flag, TrendingUp
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Brain } from "lucide-react";
 import { useAuthStore, type UserRole } from "@/lib/stores/auth.store";
 import { CoachGenieLogo } from "@/components/common/CoachGenieLogo";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -16,6 +16,7 @@ const ICON_MAP: Record<string, React.ElementType> = {
   LayoutDashboard, Users, CalendarDays, CheckSquare,
   CreditCard, Settings, GraduationCap, Brain,
   UserPlus, FileCheck, BookOpen, ClipboardList, IndianRupee, Bell, Sparkles, ExternalLink,
+  Building2, Layers, Sliders, Activity, Eye, ShieldCheck, Zap, Bot, HeartPulse, Flag, TrendingUp
 };
 
 const NAV_ITEMS = [
@@ -29,6 +30,7 @@ const NAV_ITEMS = [
   { label: "Attendance", href: "/attendance", icon: "CheckSquare", external: false },
   { label: "Attendance Reports", href: "/attendance/reports", icon: "ClipboardList", external: false },
   { label: "Fees", href: "/fees", icon: "IndianRupee", external: false },
+  { label: "Automation", href: "/automation", icon: "Zap", external: false },
   { label: "Growth Cards", href: "/growth-cards", icon: "Sparkles", external: false },
   { label: "Notifications", href: "/notifications", icon: "Bell", external: false },
   { label: "Billing", href: "/settings/billing", icon: "CreditCard", external: false },
@@ -38,23 +40,52 @@ const NAV_ITEMS = [
   { label: "Career Guidance", href: "https://career-guidence-topaz.vercel.app/", icon: "GraduationCap", external: true },
 ];
 
+const SUPER_ADMIN_NAV_ITEMS = [
+  { label: "Platform Overview", href: "/dashboard", icon: "LayoutDashboard", external: false },
+  { label: "Institutes / Tenants", href: "/platform/tenants", icon: "Building2", external: false },
+  { label: "Subscriptions & Plans", href: "/platform/plans", icon: "Layers", external: false },
+  { label: "Entitlements", href: "/platform/entitlements", icon: "CheckSquare", external: false },
+  { label: "Usage & Quotas", href: "/platform/quotas", icon: "Sliders", external: false },
+  { label: "AI / LLM Control", href: "/platform/ai", icon: "Brain", external: false },
+  { label: "Platform Analytics", href: "/platform/analytics", icon: "TrendingUp", external: false },
+  { label: "Platform Finance", href: "/platform/finance", icon: "IndianRupee", external: false },
+  { label: "Feature Flags", href: "/platform/feature-flags", icon: "Flag", external: false },
+  { label: "Diagnostics", href: "/platform/diagnostics", icon: "Eye", external: false },
+  { label: "System Health", href: "/platform/health", icon: "HeartPulse", external: false },
+  { label: "Platform Audit Logs", href: "/platform/audit-logs", icon: "ShieldCheck", external: false },
+  { label: "Documentation", href: "/docs", icon: "BookOpen", external: false },
+  { label: "Career Guidance", href: "https://career-guidence-topaz.vercel.app/", icon: "GraduationCap", external: true },
+];
+
 const MODULE_ROLES: Record<string, string[]> = {
-  "/dashboard": ["owner", "super_admin", "admin", "counselor", "tutor", "coach"],
-  "/leads": ["owner", "super_admin", "admin", "counselor"],
-  "/admissions": ["owner", "super_admin", "admin", "counselor"],
-  "/students": ["owner", "super_admin", "admin", "counselor", "tutor", "coach"],
-  "/batches": ["owner", "super_admin", "admin", "counselor", "tutor", "coach"],
-  "/exams": ["owner", "super_admin", "admin", "tutor", "coach"],
-  "/sessions": ["owner", "super_admin", "admin", "tutor", "coach"],
-  "/attendance": ["owner", "super_admin", "admin", "tutor", "coach"],
-  "/attendance/reports": ["owner", "super_admin", "admin", "tutor", "coach"],
-  "/fees": ["owner", "super_admin", "admin", "counselor"],
-  "/growth-cards": ["owner", "super_admin", "admin", "counselor", "tutor", "coach"],
-  "/notifications": ["owner", "super_admin", "admin", "counselor"],
-  "/settings/billing": ["owner", "super_admin"],
-  "/settings": ["owner", "super_admin", "admin"],
-  "/ai/analytics": ["owner", "super_admin", "admin", "counselor", "tutor", "coach"],
-  "/docs": ["owner", "super_admin", "admin", "counselor", "tutor", "coach"],
+  "/dashboard": ["super_admin", "owner", "admin", "counselor", "tutor", "coach"],
+  "/leads": ["owner", "admin", "counselor"],
+  "/admissions": ["owner", "admin", "counselor"],
+  "/students": ["owner", "admin", "counselor", "tutor", "coach"],
+  "/batches": ["owner", "admin", "counselor", "tutor", "coach"],
+  "/exams": ["owner", "admin", "tutor", "coach"],
+  "/sessions": ["owner", "admin", "tutor", "coach"],
+  "/attendance": ["owner", "admin", "tutor", "coach"],
+  "/attendance/reports": ["owner", "admin", "tutor", "coach"],
+  "/fees": ["owner", "admin", "counselor"],
+  "/automation": ["owner", "admin", "counselor"],
+  "/growth-cards": ["owner", "admin", "counselor", "tutor", "coach"],
+  "/notifications": ["owner", "admin", "counselor", "tutor", "coach"],
+  "/settings/billing": ["owner"],
+  "/settings": ["owner", "admin"],
+  "/ai/analytics": ["super_admin", "owner", "admin", "counselor", "tutor", "coach"],
+  "/docs": ["super_admin", "owner", "admin", "counselor", "tutor", "coach"],
+  "/platform/tenants": ["super_admin"],
+  "/platform/plans": ["super_admin"],
+  "/platform/entitlements": ["super_admin"],
+  "/platform/quotas": ["super_admin"],
+  "/platform/ai": ["super_admin"],
+  "/platform/analytics": ["super_admin"],
+  "/platform/finance": ["super_admin"],
+  "/platform/feature-flags": ["super_admin"],
+  "/platform/diagnostics": ["super_admin"],
+  "/platform/health": ["super_admin"],
+  "/platform/audit-logs": ["super_admin"],
 };
 
 interface SidebarProps {
@@ -70,14 +101,16 @@ export function Sidebar({ collapsed, onCollapse }: SidebarProps) {
 
   // Normalize role (handle uppercase or lowercase)
   const rawRole = (user?.role || storeRole || "owner").toLowerCase();
-  const normalizedRole = rawRole === "super_admin" ? "owner" : rawRole;
 
-  const visibleItems = NAV_ITEMS.filter((item) => {
-    if (item.external) return true;
-    const allowed = MODULE_ROLES[item.href];
-    if (!allowed) return true;
-    return allowed.includes(normalizedRole) || allowed.includes(rawRole);
-  });
+  const visibleItems =
+    rawRole === "super_admin"
+      ? SUPER_ADMIN_NAV_ITEMS
+      : NAV_ITEMS.filter((item) => {
+          if (item.external) return true;
+          const allowed = MODULE_ROLES[item.href];
+          if (!allowed) return true;
+          return allowed.includes(rawRole);
+        });
 
   // Find the single active item that has the longest matching href prefix
   const activeItemHref = visibleItems

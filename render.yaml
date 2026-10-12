@@ -15,7 +15,7 @@ services:
       - key: ALLOW_SEED
         value: "false"
       - key: ALLOWED_ORIGINS
-        value: "https://thecoachgenie.in,https://www.thecoachgenie.in,https://app.thecoachgenie.in,https://coachgenie-frontend.onrender.com"
+        value: "https://thecoachgenie.in,https://www.thecoachgenie.in,https://app.thecoachgenie.in,https://student.thecoachgenie.in,https://parent.thecoachgenie.in,https://coachgenie-frontend.onrender.com"
       - key: DATABASE_URL
         sync: false
       - key: SECRET_KEY

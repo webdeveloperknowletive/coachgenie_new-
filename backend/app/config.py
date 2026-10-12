@@ -9,11 +9,19 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = (
         "http://localhost:3000,"
         "http://127.0.0.1:3000,"
+        "http://localhost:3001,"
+        "http://127.0.0.1:3001,"
+        "http://localhost:3002,"
+        "http://127.0.0.1:3002,"
+        "http://localhost:3003,"
+        "http://127.0.0.1:3003,"
         "https://coachgenie-phase1.onrender.com,"
         "https://coachgenie-frontend.onrender.com,"
         "https://thecoachgenie.in,"
         "https://www.thecoachgenie.in,"
         "https://app.thecoachgenie.in,"
+        "https://student.thecoachgenie.in,"
+        "https://parent.thecoachgenie.in,"
         "https://coachgenie-backend-51uq.onrender.com,"
         "https://coachgenie-copilotai.onrender.com,"
     )
@@ -24,8 +32,8 @@ class Settings(BaseSettings):
 
     SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     BCRYPT_ROUNDS: int = 12
     RATE_LIMIT_PER_MINUTE: int = 100

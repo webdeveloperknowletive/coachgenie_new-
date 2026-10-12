@@ -45,6 +45,7 @@ class Batch(Base):
     # schedule = mapped_column(JSONB, nullable=True, default=list)
     schedule = mapped_column(JSONB, nullable=True, default=list)
     subjects = mapped_column(JSONB, nullable=True, default=list)
+    custom_fields = mapped_column(JSONB, nullable=True, default=dict)
 
     created_at = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     updated_at = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"), onupdate=text("NOW()"))

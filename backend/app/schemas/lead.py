@@ -21,11 +21,10 @@ def sanitize_phone_number(v: Optional[str]) -> Optional[str]:
     v_clean = str(v).strip()
     if not v_clean:
         return None
-    # Remove common formatting characters
-    digits_and_plus = re.sub(r"[^\d+]", "", v_clean)
-    if len(re.sub(r"\D", "", digits_and_plus)) < 7:
-        raise ValueError("Phone number must have at least 7 digits.")
-    return digits_and_plus
+    digits = re.sub(r"\D", "", v_clean)
+    if len(digits) != 10:
+        raise ValueError("Phone number must be exactly 10 digits.")
+    return digits
 
 
 class LeadCreate(BaseModel):
@@ -46,6 +45,17 @@ class LeadCreate(BaseModel):
     board_name: Optional[str] = None
     batch_id: Optional[uuid.UUID] = None
     subjects: Optional[List[str]] = []
+    custom_fields: Optional[dict] = Field(default_factory=dict)
+
+    @field_validator("full_name", "parent_name")
+    @classmethod
+    def validate_name_no_digits(cls, v: Optional[str]) -> Optional[str]:
+        if v:
+            v_clean = v.strip()
+            if re.search(r"\d", v_clean):
+                raise ValueError("Name cannot contain numbers.")
+            return v_clean
+        return v
 
     @field_validator("phone", "parent_phone", "parent_contact_number", mode="before")
     @classmethod
@@ -89,6 +99,17 @@ class LeadUpdate(BaseModel):
     board_name: Optional[str] = None
     batch_id: Optional[uuid.UUID] = None
     subjects: Optional[List[str]] = None
+    custom_fields: Optional[dict] = None
+
+    @field_validator("full_name", "parent_name")
+    @classmethod
+    def validate_name_no_digits(cls, v: Optional[str]) -> Optional[str]:
+        if v:
+            v_clean = v.strip()
+            if re.search(r"\d", v_clean):
+                raise ValueError("Name cannot contain numbers.")
+            return v_clean
+        return v
 
     @field_validator("phone", "parent_phone", "parent_contact_number", mode="before")
     @classmethod
@@ -173,6 +194,7 @@ class LeadOut(BaseModel):
     batch_id: Optional[uuid.UUID] = None
     batch_name: Optional[str] = None
     subjects: Optional[List[str]] = []
+    custom_fields: Optional[dict] = Field(default_factory=dict)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     activities: Optional[List[ActivityOut]] = []
@@ -211,8 +233,44 @@ class LeadOut(BaseModel):
                 "batch_id": d.get("batch_id"),
                 "batch_name": d.get("batch_name"),
                 "subjects": d.get("subjects") or [],
-                "created_at": d.get("created_at"),
-                "updated_at": d.get("updated_at"),
+                "custom_fields": d.get("custom_fields") or {},
                 "activities": acts,
             }
         return obj
+
+
+class PipelineStageConfig(BaseModel):
+    id: str = Field(..., pattern="^[a-z0-9_]{2,30}$", description="Unique lowercase identifier for stage")
+    label: str = Field(..., min_length=2, max_length=50)
+    order: int = Field(..., ge=1, le=50)
+    is_system: bool = False
+
+
+class RequiredDocumentConfig(BaseModel):
+    id: str = Field(..., pattern="^[a-z0-9_]{2,30}$")
+    name: str = Field(..., min_length=2, max_length=100)
+    mandatory: bool = False
+
+
+class CRMPipelineConfig(BaseModel):
+    stages: List[PipelineStageConfig] = []
+    required_documents: List[RequiredDocumentConfig] = []
+
+    @field_validator("stages")
+    @classmethod
+    def validate_unique_stages(cls, v: List[PipelineStageConfig]) -> List[PipelineStageConfig]:
+        ids = set()
+        orders = set()
+        has_new = False
+        for s in v:
+            if s.id in ids:
+                raise ValueError(f"Duplicate stage ID '{s.id}' found in pipeline configuration.")
+            if s.order in orders:
+                raise ValueError(f"Duplicate stage order '{s.order}' found in pipeline configuration.")
+            ids.add(s.id)
+            orders.add(s.order)
+            if s.id == "new":
+                has_new = True
+        if not has_new:
+            raise ValueError("Pipeline configuration must contain the default initial stage 'new'.")
+        return v

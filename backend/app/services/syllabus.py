@@ -36,10 +36,26 @@ async def get_syllabus(db: AsyncSession, tenant_id: str, batch_id: str) -> list:
 
 
 async def add_topic(db: AsyncSession, tenant_id: str, batch_id: str, data: dict) -> dict:
+    from app.utils.exceptions import ConflictError
+    from sqlalchemy import func
+    title = (data.get("title") or "").strip()
+    if title:
+        existing = await db.scalar(
+            select(SyllabusItem.id).where(
+                and_(
+                    SyllabusItem.tenant_id == tenant_id,
+                    SyllabusItem.batch_id == batch_id,
+                    func.lower(SyllabusItem.title) == title.lower(),
+                )
+            )
+        )
+        if existing:
+            raise ConflictError(f"A syllabus topic with the title '{title}' already exists for this batch.")
+
     item = SyllabusItem(
         tenant_id=tenant_id,
         batch_id=batch_id,
-        title=data["title"],
+        title=title,
         subject=data.get("subject"),
         description=data.get("description"),
         order=data.get("order", 0),

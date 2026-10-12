@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
 import uuid
 
@@ -19,6 +19,8 @@ class ChatResponse(BaseModel):
 
 
 class SessionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+
     id: uuid.UUID
     feature: str
     started_at: str
@@ -26,14 +28,11 @@ class SessionOut(BaseModel):
     total_tokens: Optional[int] = None
     model_used: Optional[str] = None
 
-    class Config:
-        from_attributes = True
-
 
 class MessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     role: str
     content: str
 
-    class Config:
-        from_attributes = True

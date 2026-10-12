@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, or_, func
 from app.models.batch import Batch, BatchStudent, Class, Subject
 from app.models.syllabus import SyllabusItem, SyllabusProgress
 from app.utils.exceptions import NotFoundError, ConflictError
@@ -18,7 +18,23 @@ async def get_subjects(db: AsyncSession, tenant_id: str) -> list:
 
 
 async def create_subject(db: AsyncSession, tenant_id: str, data: dict) -> Subject:
-    subject = Subject(tenant_id=tenant_id, **data)
+    import uuid
+    from app.utils.exceptions import ConflictError
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
+    name = (data.get("name") or "").strip()
+    if name:
+        existing = await db.scalar(
+            select(Subject.id).where(
+                and_(
+                    Subject.tenant_id == t_uuid,
+                    func.lower(Subject.name) == name.lower()
+                )
+            )
+        )
+        if existing:
+            raise ConflictError(f"A subject with the name '{name}' already exists in this institute.")
+
+    subject = Subject(tenant_id=t_uuid, **data)
     db.add(subject)
     await db.flush()
     return subject
@@ -90,24 +106,78 @@ async def get_batch(db: AsyncSession, tenant_id: str, batch_id: str) -> Batch:
 
 
 async def create_batch(db: AsyncSession, tenant_id: str, data: dict) -> Batch:
-    batch = Batch(tenant_id=tenant_id, **data)
+    import uuid
+    from app.utils.exceptions import ConflictError
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
+    
+    # Server-side subscription quota verification
+    from app.models.tenant import Tenant
+    from app.services.entitlement import check_quota
+    tenant_obj = await db.get(Tenant, t_uuid)
+    if tenant_obj:
+        await check_quota(db, tenant_obj, "batches", increment=1)
+
+    name = (data.get("name") or "").strip()
+    academic_year = (data.get("academic_year") or "").strip()
+    code = (data.get("code") or "").strip()
+
+    dup_conds = []
+    if name and academic_year:
+        dup_conds.append(and_(func.lower(Batch.name) == name.lower(), Batch.academic_year == academic_year))
+    elif name:
+        dup_conds.append(func.lower(Batch.name) == name.lower())
+    if code:
+        dup_conds.append(func.lower(Batch.code) == code.lower())
+
+    if dup_conds:
+        existing = await db.scalar(
+            select(Batch.id).where(
+                and_(
+                    Batch.tenant_id == t_uuid,
+                    or_(*dup_conds)
+                )
+            )
+        )
+        if existing:
+            raise ConflictError("A batch with this name or code already exists for this academic year.")
+
+    batch = Batch(tenant_id=t_uuid, **data)
     db.add(batch)
     await db.flush()
     batch.student_ids = []
     return batch
 
 
-# async def update_batch(db: AsyncSession, tenant_id: str,
-#                        batch_id: str, data: dict) -> Batch:
-#     batch = await get_batch(db, tenant_id, batch_id)
-#     for key, value in data.items():
-#         if value is not None:
-#             setattr(batch, key, value)
-#     await db.flush()
-#     return await _attach_student_ids(db, batch)
 async def update_batch(db: AsyncSession, tenant_id: str,
                        batch_id: str, data: dict) -> Batch:
-    batch = await get_batch(db, tenant_id, batch_id)
+    import uuid
+    from app.utils.exceptions import ConflictError
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
+    batch = await get_batch(db, str(t_uuid), batch_id)
+
+    new_name = (data.get("name") or "").strip() if "name" in data and data["name"] is not None else None
+    new_ay = (data.get("academic_year") or "").strip() if "academic_year" in data and data["academic_year"] is not None else batch.academic_year
+    new_code = (data.get("code") or "").strip() if "code" in data and data["code"] is not None else None
+
+    dup_conds = []
+    if new_name and (new_name != batch.name or new_ay != batch.academic_year):
+        dup_conds.append(and_(func.lower(Batch.name) == new_name.lower(), Batch.academic_year == new_ay))
+    if new_code and new_code != batch.code:
+        dup_conds.append(func.lower(Batch.code) == new_code.lower())
+
+    if dup_conds:
+        existing = await db.scalar(
+            select(Batch.id).where(
+                and_(
+                    Batch.tenant_id == t_uuid,
+                    Batch.id != batch.id,
+                    or_(*dup_conds)
+                )
+            )
+        )
+        if existing:
+            raise ConflictError("Another batch with this name or code already exists for this academic year.")
+
     if "status" in data and data["status"] is not None:
         status_val = str(data["status"]).upper().strip()
         if status_val not in {"ACTIVE", "UPCOMING", "COMPLETED"}:
@@ -264,14 +334,32 @@ async def get_classes(db: AsyncSession, tenant_id: str, batch_id: str) -> list:
 #     await db.flush()
 #     return cls
 async def create_class(db: AsyncSession, tenant_id: str, data: dict) -> Class:
+    import uuid
+    from app.utils.exceptions import ConflictError
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
     batch_result = await db.execute(
         select(Batch).where(
-            and_(Batch.id == data["batch_id"], Batch.tenant_id == tenant_id)
+            and_(Batch.id == data["batch_id"], Batch.tenant_id == t_uuid)
         )
     )
     if not batch_result.scalar_one_or_none():
         raise NotFoundError("Batch")
-    cls = Class(tenant_id=tenant_id, **data)
+
+    scheduled_at = data.get("scheduled_at")
+    if scheduled_at:
+        existing_class = await db.scalar(
+            select(Class.id).where(
+                and_(
+                    Class.tenant_id == t_uuid,
+                    Class.batch_id == data["batch_id"],
+                    Class.scheduled_at == scheduled_at,
+                )
+            )
+        )
+        if existing_class:
+            raise ConflictError("A class is already scheduled for this batch at this date and time.")
+
+    cls = Class(tenant_id=t_uuid, **data)
     db.add(cls)
     await db.flush()
     return cls
@@ -293,13 +381,6 @@ async def update_class(db: AsyncSession, tenant_id: str,
 
 # ── Syllabus Topics (belong to Subject) ───────────────────────
 
-# async def get_syllabus_topics(db: AsyncSession, subject_id: str) -> list:
-#     result = await db.execute(
-#         select(SyllabusItem)
-#         .where(SyllabusItem.subject_id == subject_id)
-#         .order_by(SyllabusItem.sort_order.asc(), SyllabusItem.created_at.asc())
-#     )
-#     return result.scalars().all()
 async def get_syllabus_topics(db: AsyncSession, tenant_id: str, subject_id: str) -> list:
     result = await db.execute(
         select(SyllabusItem)
@@ -313,20 +394,33 @@ async def get_syllabus_topics(db: AsyncSession, tenant_id: str, subject_id: str)
     )
     return result.scalars().all()
 
-# async def create_syllabus_topic(db: AsyncSession, tenant_id: str, data: dict) -> SyllabusItem:
-#     topic = SyllabusItem(tenant_id=tenant_id, **data)
-#     db.add(topic)
-#     await db.flush()
-#     return topic
 async def create_syllabus_topic(db: AsyncSession, tenant_id: str, data: dict) -> SyllabusItem:
+    import uuid
+    from app.utils.exceptions import ConflictError
+    t_uuid = uuid.UUID(str(tenant_id)) if isinstance(tenant_id, (str, uuid.UUID)) else tenant_id
     subject_result = await db.execute(
         select(Subject).where(
-            and_(Subject.id == data["subject_id"], Subject.tenant_id == tenant_id)
+            and_(Subject.id == data["subject_id"], Subject.tenant_id == t_uuid)
         )
     )
     if not subject_result.scalar_one_or_none():
         raise NotFoundError("Subject")
-    topic = SyllabusItem(tenant_id=tenant_id, **data)
+
+    title = (data.get("title") or "").strip()
+    if title:
+        existing = await db.scalar(
+            select(SyllabusItem.id).where(
+                and_(
+                    SyllabusItem.tenant_id == t_uuid,
+                    SyllabusItem.subject_id == data["subject_id"],
+                    func.lower(SyllabusItem.title) == title.lower(),
+                )
+            )
+        )
+        if existing:
+            raise ConflictError(f"A syllabus topic with the title '{title}' already exists for this subject.")
+
+    topic = SyllabusItem(tenant_id=t_uuid, **data)
     db.add(topic)
     await db.flush()
     return topic

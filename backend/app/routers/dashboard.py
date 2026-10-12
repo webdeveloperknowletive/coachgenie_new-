@@ -40,12 +40,16 @@ async def get_dashboard(
             db, str(tenant.id), str(student.id)
         )
     elif role == "parent":
-        # FIX: Use .all() not .scalar_one_or_none() — a parent can have multiple children.
+        from sqlalchemy import select, and_, or_
+        from app.models.student import Student
         result = await db.execute(
             select(Student).where(
                 and_(
                     Student.tenant_id == tenant.id,
-                    Student.parent_email == current_user.email
+                    or_(
+                        Student.parent_user_id == current_user.id,
+                        Student.parent_email == current_user.email,
+                    ),
                 )
             )
         )
