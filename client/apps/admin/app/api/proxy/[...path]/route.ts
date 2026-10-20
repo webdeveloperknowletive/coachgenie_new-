@@ -80,7 +80,14 @@ async function handler(
 
   let res: Response;
   try {
-    res = await fetch(url, init);
+    res = await fetch(url, { ...init, redirect: "manual" });
+    if (res.status === 307 || res.status === 308) {
+      const location = res.headers.get("location");
+      if (location) {
+        const secureLocation = location.replace(/^http:\/\//i, "https://");
+        res = await fetch(secureLocation, init);
+      }
+    }
   } catch (err) {
     return NextResponse.json(
       { error: "Backend service temporarily unavailable. Please verify the backend is running." },
@@ -104,7 +111,14 @@ async function handler(
         retryInit.body = rawBody;
       }
       try {
-        res = await fetch(url, retryInit);
+        res = await fetch(url, { ...retryInit, redirect: "manual" });
+        if (res.status === 307 || res.status === 308) {
+          const location = res.headers.get("location");
+          if (location) {
+            const secureLocation = location.replace(/^http:\/\//i, "https://");
+            res = await fetch(secureLocation, retryInit);
+          }
+        }
       } catch (err) {
         return NextResponse.json(
           { error: "Backend service temporarily unavailable. Please verify the backend is running." },
